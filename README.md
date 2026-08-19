@@ -12,7 +12,7 @@ Minimal nginx dynamic module for OpenID Connect Authorization Code Flow.
 - AES-256-GCM encrypted session cookies
 - Cookie expiry capped by ID-token `exp` and optional `session_max_age`
 - SQLite-backed opaque sessions surviving nginx restart
-- Refresh-token rotation with atomic SQLite transactions (server-side only)
+- Refresh-token rotation and RFC 7009 revocation at RP logout (server-side only)
 - Optional UserInfo lookup with `sub` binding
 - Local, RP-initiated, and OIDC Backchannel Logout
 - Provider-specific session/state cookies for multi-IdP deployments
@@ -24,7 +24,7 @@ Not implemented:
 
 - Clustered/multi-host session storage
 - Frontchannel logout
-- Token revocation
+
 
 ## Build
 
@@ -175,6 +175,10 @@ Requires `session_store`. Refresh tokens never reach the browser; they are AES-2
 
 Absolute session lifetime stays capped by `session_max_age`/ID-token `exp`; refresh does not extend it.
 
+### Token revocation
+
+At RP logout, module reads encrypted refresh token from SQLite and calls IdP discovery `revocation_endpoint` per RFC 7009 with `token_type_hint=refresh_token` and client Basic authentication. Missing endpoint, discovery failure, or revocation failure is logged and does not block local logout: browser cookie and SQLite session are still deleted.
+
 ### Backchannel Logout
 
 Set `backchannel_logout_uri` and register its public HTTPS URL at IdP. IdP `POST`s form field `logout_token`; module validates signature, issuer, audience, expiry, Backchannel Logout event, and absence of `nonce`. With `session_store`, matching session rows are deleted: `sid` targets one session; `sub` is fallback and deletes all sessions for user. Endpoint returns `200` on accepted token and `400` on invalid token.
@@ -195,7 +199,7 @@ Requires Docker and Docker Compose.
 ./test/e2e.sh
 ```
 
-Test covers build, discovery, PKCE, JWKS rotation, `aud` array plus `azp`, `max_age` plus `auth_time`, UserInfo, encrypted cookie, expiry, original URI restore, session survival across nginx restart, forced refresh-token rotation, RP logout, and Backchannel Logout session revocation.
+Test covers build, discovery, PKCE, JWKS rotation, `aud` array plus `azp`, `max_age` plus `auth_time`, UserInfo, encrypted cookie, expiry, original URI restore, session survival across nginx restart, forced refresh-token rotation, RFC 7009 revocation at RP logout, and Backchannel Logout session revocation.
 
 ## Security Notes
 

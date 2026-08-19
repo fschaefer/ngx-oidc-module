@@ -95,6 +95,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "issuer": ISSUER,
                 "authorization_endpoint": ISSUER + "/authorize",
                 "token_endpoint": ISSUER + "/token",
+                "revocation_endpoint": ISSUER + "/revoke",
                 "jwks_uri": ISSUER + "/jwks",
                 "userinfo_endpoint": ISSUER + "/userinfo",
                 "end_session_endpoint": ISSUER + "/logout",
@@ -149,6 +150,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/revoke":
+            length = int(self.headers.get("Content-Length", 0))
+            form = urllib.parse.parse_qs(self.rfile.read(length).decode())
+            if (self.headers.get("Authorization") != "Basic dGVzdC1jbGllbnQ6dGVzdC1zZWNyZXQ="
+                    or not form.get("token", [""])[0]
+                    or form.get("token_type_hint", [""])[0] != "refresh_token"):
+                self._json({"error": "invalid_request"}, 400)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if parsed.path == "/token":
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length).decode()

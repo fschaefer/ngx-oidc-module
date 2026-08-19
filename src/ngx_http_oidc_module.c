@@ -42,6 +42,8 @@ static ngx_int_t ngx_http_oidc_get_body_arg(ngx_http_request_t *r,
     ngx_str_t *name, ngx_str_t *value);
 static ngx_int_t ngx_http_oidc_logout(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p);
+static void ngx_http_oidc_revoke_refresh_token(ngx_http_request_t *r,
+    ngx_http_oidc_provider_t *p, ngx_str_t *cookie);
 static ngx_int_t ngx_http_oidc_build_redirect_uri(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p, ngx_str_t *out);
 static ngx_int_t ngx_http_oidc_random(ngx_pool_t *pool, size_t len,
@@ -938,6 +940,11 @@ ngx_http_oidc_discover(ngx_http_oidc_provider_t *p, ngx_log_t *log)
         p->jwks_uri = v;
     }
     if (ngx_http_oidc_json_get_string(&body,
+            &(ngx_str_t) ngx_string("revocation_endpoint"), &v) == NGX_OK)
+    {
+        p->revocation_endpoint = v;
+    }
+    if (ngx_http_oidc_json_get_string(&body,
             &(ngx_str_t) ngx_string("end_session_endpoint"), &v) == NGX_OK)
     {
         p->end_session_endpoint = v;
@@ -1389,6 +1396,7 @@ ngx_http_oidc_logout(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
         if (p->session_store.len > 0
             && ngx_http_oidc_get_cookie(r, &p->cookie_name, &cookie) == NGX_OK)
         {
+            ngx_http_oidc_revoke_refresh_token(r, p, &cookie);
             ngx_http_oidc_session_db_delete(p, &cookie);
         }
     }
@@ -1556,6 +1564,95 @@ ngx_http_oidc_session_db_store(ngx_http_request_t *r, ngx_http_oidc_provider_t *
     sqlite3_exec(p->session_db, "DELETE FROM oidc_sessions WHERE expires_at < strftime('%s','now')",
                  NULL, NULL, NULL);
     return NGX_OK;
+}
+
+static void
+ngx_http_oidc_revoke_refresh_token(ngx_http_request_t *r,
+    ngx_http_oidc_provider_t *p, ngx_str_t *cookie)
+{
+    sqlite3_stmt               *stmt = NULL;
+    const void                 *blob;
+    int                         len;
+    ngx_http_oidc_http_resp_t  resp;
+    ngx_str_t                   encrypted, refresh, body, cred, cred_b64, auth;
+    u_char                     *q;
+
+    if (p->revocation_endpoint.len == 0
+        && ngx_http_oidc_discover(p, r->connection->log) != NGX_OK)
+    {
+        ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                      "oidc: refresh-token revocation skipped: discovery failed");
+        return;
+    }
+    if (p->revocation_endpoint.len == 0
+        || ngx_http_oidc_session_db_open(p, r->connection->log) != NGX_OK
+        || sqlite3_prepare_v2(p->session_db,
+            "SELECT refresh_token FROM oidc_sessions WHERE id = ?", -1,
+            &stmt, NULL) != SQLITE_OK
+        || sqlite3_bind_text(stmt, 1, (const char *) cookie->data, cookie->len,
+                             SQLITE_TRANSIENT) != SQLITE_OK)
+    {
+        if (stmt) sqlite3_finalize(stmt);
+        return;
+    }
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return;
+    }
+    blob = sqlite3_column_blob(stmt, 0);
+    len = sqlite3_column_bytes(stmt, 0);
+    encrypted.data = ngx_pnalloc(r->pool, len ? len : 1);
+    if (encrypted.data == NULL) {
+        sqlite3_finalize(stmt);
+        return;
+    }
+    ngx_memcpy(encrypted.data, blob, len);
+    encrypted.len = len;
+    sqlite3_finalize(stmt);
+
+    if (len == 0 || ngx_http_oidc_session_decrypt(r->pool, p, &encrypted,
+                                                   &refresh) != NGX_OK
+        || refresh.len == 0)
+    {
+        return;
+    }
+
+    body.len = sizeof("token=&token_type_hint=refresh_token") - 1 + refresh.len * 3;
+    body.data = ngx_pnalloc(r->pool, body.len);
+    if (body.data == NULL) {
+        return;
+    }
+    q = ngx_cpymem(body.data, "token=", 6);
+    q = (u_char *) ngx_escape_uri(q, refresh.data, refresh.len,
+                                  NGX_ESCAPE_URI_COMPONENT);
+    q = ngx_cpymem(q, "&token_type_hint=refresh_token", 30);
+    body.len = q - body.data;
+
+    cred.len = p->client_id.len + 1 + p->client_secret.len;
+    cred.data = ngx_pnalloc(r->pool, cred.len);
+    cred_b64.data = ngx_pnalloc(r->pool, ngx_base64_encoded_length(cred.len));
+    if (cred.data == NULL || cred_b64.data == NULL) {
+        return;
+    }
+    q = ngx_cpymem(cred.data, p->client_id.data, p->client_id.len);
+    *q++ = ':';
+    ngx_memcpy(q, p->client_secret.data, p->client_secret.len);
+    ngx_encode_base64(&cred_b64, &cred);
+    auth.len = 6 + cred_b64.len;
+    auth.data = ngx_pnalloc(r->pool, auth.len);
+    if (auth.data == NULL) {
+        return;
+    }
+    ngx_memcpy(auth.data, "Basic ", 6);
+    ngx_memcpy(auth.data + 6, cred_b64.data, cred_b64.len);
+
+    if (ngx_http_oidc_http_post_form(r->connection->log,
+            &p->revocation_endpoint, &p->ssl_trusted_certificate, &auth,
+            &body, &resp) != NGX_OK || (resp.status != 200 && resp.status != 204))
+    {
+        ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                      "oidc: refresh-token revocation failed");
+    }
 }
 
 static ngx_int_t

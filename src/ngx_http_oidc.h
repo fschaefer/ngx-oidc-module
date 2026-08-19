@@ -45,6 +45,7 @@ typedef struct {
     /* discovered */
     ngx_str_t   authorization_endpoint;
     ngx_str_t   token_endpoint;
+    ngx_str_t   revocation_endpoint;
     ngx_str_t   end_session_endpoint;
     ngx_str_t   userinfo_endpoint;
     ngx_str_t   jwks_uri;

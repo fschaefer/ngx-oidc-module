@@ -77,6 +77,7 @@ docker run --rm --network test_oidc -v /tmp:/tmp \
     http://demo.example.com/logout >"$cookies"
 grep -q 'Set-Cookie: oidc_session_my_idp=;' "$cookies"
 grep -q 'Location: https://idp.test:8443/logout?post_logout_redirect_uri=' "$cookies"
+$compose logs --no-color idp | grep -q 'POST /revoke HTTP/1.1" 200'
 
 # backchannel logout: IdP-side logout kills the server session
 rm -f /tmp/oidc-bc-cookies
