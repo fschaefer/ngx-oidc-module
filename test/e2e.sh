@@ -78,5 +78,27 @@ docker run --rm --network test_oidc -v /tmp:/tmp \
 grep -q 'Set-Cookie: oidc_session_my_idp=;' "$cookies"
 grep -q 'Location: https://idp.test:8443/logout?post_logout_redirect_uri=' "$cookies"
 
+# backchannel logout: IdP-side logout kills the server session
+rm -f /tmp/oidc-bc-cookies
+docker run --rm --network test_oidc -v /tmp:/tmp \
+    curlimages/curl:8.10.1 --insecure --fail --silent --show-error \
+    --location --max-redirs 5 --cookie-jar /tmp/oidc-bc-cookies \
+    --cookie /tmp/oidc-bc-cookies --connect-to demo.example.com:80:nginx:80 \
+    http://demo.example.com/ | grep -qx 'Hello, Jane Doe!'
+logout_token=$(docker run --rm --network test_oidc curlimages/curl:8.10.1 \
+    --insecure --fail --silent https://idp.test:8443/logout-token)
+bc_code=$(docker run --rm --network test_oidc curlimages/curl:8.10.1 \
+    --silent -o /dev/null -w '%{http_code}' -X POST \
+    --data "logout_token=${logout_token}" \
+    --connect-to demo.example.com:80:nginx:80 \
+    http://demo.example.com/_oidc_backchannel)
+[ "$bc_code" = "200" ]
+sess_code=$(docker run --rm --network test_oidc -v /tmp:/tmp \
+    curlimages/curl:8.10.1 --silent -o /dev/null -w '%{http_code}' \
+    --cookie /tmp/oidc-bc-cookies --connect-to demo.example.com:80:nginx:80 \
+    http://demo.example.com/)
+[ "$sess_code" = "302" ]
+rm -f /tmp/oidc-bc-cookies
+
 rm -f /tmp/oidc-e2e-cookies
 printf '%s\n' 'E2E passed'

@@ -37,6 +37,7 @@ typedef struct {
     ngx_str_t   scopes;
     ngx_str_t   redirect_uri;
     ngx_str_t   logout_uri;
+    ngx_str_t   backchannel_logout_uri;
     ngx_str_t   post_logout_uri;
     time_t      session_max_age;
     ngx_flag_t  userinfo;
@@ -68,6 +69,7 @@ typedef struct {
 typedef struct {
     ngx_str_t  claims;
     ngx_str_t  userinfo;
+    ngx_http_oidc_provider_t  *provider;
 } ngx_http_oidc_request_ctx_t;
 
 /* http.c */
@@ -92,6 +94,9 @@ ngx_int_t ngx_http_oidc_json_get_string(ngx_str_t *json, ngx_str_t *key,
     ngx_str_t *out);
 ngx_int_t ngx_http_oidc_json_array_contains(ngx_str_t *json, ngx_str_t *key,
     ngx_str_t *needle);
+ngx_int_t ngx_http_oidc_json_has_key(ngx_str_t *json, ngx_str_t *key);
+ngx_int_t ngx_http_oidc_json_object_has_key(ngx_str_t *json, ngx_str_t *key,
+    ngx_str_t *member);
 
 /* base64url helpers (jwt.c) */
 ngx_int_t ngx_http_oidc_b64url_decode(ngx_pool_t *pool, ngx_str_t *in,

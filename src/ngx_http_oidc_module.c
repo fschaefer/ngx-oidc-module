@@ -35,6 +35,11 @@ static ngx_int_t ngx_http_oidc_issue_session(ngx_http_request_t *r,
 static ngx_int_t ngx_http_oidc_validate_session(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p, ngx_str_t *claims_out, ngx_str_t *userinfo_out);
 static ngx_int_t ngx_http_oidc_redirect(ngx_http_request_t *r, ngx_str_t *url);
+static ngx_int_t ngx_http_oidc_backchannel(ngx_http_request_t *r,
+    ngx_http_oidc_provider_t *p);
+static void ngx_http_oidc_backchannel_done(ngx_http_request_t *r);
+static ngx_int_t ngx_http_oidc_get_body_arg(ngx_http_request_t *r,
+    ngx_str_t *name, ngx_str_t *value);
 static ngx_int_t ngx_http_oidc_logout(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p);
 static ngx_int_t ngx_http_oidc_build_redirect_uri(ngx_http_request_t *r,
@@ -49,7 +54,8 @@ static ngx_int_t ngx_http_oidc_session_db_open(ngx_http_oidc_provider_t *p,
     ngx_log_t *log);
 static ngx_int_t ngx_http_oidc_session_db_store(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p, ngx_str_t *session, ngx_str_t *refresh_token,
-    time_t access_expires, time_t expires, ngx_str_t *cookie);
+    time_t access_expires, time_t expires, ngx_str_t *sid, ngx_str_t *sub,
+    ngx_str_t *cookie);
 static ngx_int_t ngx_http_oidc_session_db_load(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p, ngx_str_t *cookie, ngx_str_t *session,
     ngx_str_t *refresh_token, time_t *access_expires);
@@ -57,6 +63,9 @@ static void ngx_http_oidc_session_db_delete(ngx_http_oidc_provider_t *p,
     ngx_str_t *cookie);
 static ngx_int_t ngx_http_oidc_refresh_session(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p, ngx_str_t *cookie, ngx_str_t *refresh_token);
+static ngx_int_t ngx_http_oidc_session_db_delete_sub(
+    ngx_http_oidc_provider_t *p, ngx_str_t *sid, ngx_str_t *sub,
+    ngx_log_t *log);
 static ngx_int_t ngx_http_oidc_get_cookie(ngx_http_request_t *r,
     ngx_str_t *name, ngx_str_t *value);
 static ngx_int_t ngx_http_oidc_set_cookie(ngx_http_request_t *r,
@@ -159,6 +168,13 @@ static ngx_command_t  ngx_http_oidc_commands[] = {
 
     { ngx_string("userinfo"),
       NGX_HTTP_OIDC_CONF|NGX_CONF_FLAG,
+      ngx_http_oidc_provider_param,
+      0,
+      0,
+      NULL },
+
+    { ngx_string("backchannel_logout_uri"),
+      NGX_HTTP_OIDC_CONF|NGX_CONF_TAKE1,
       ngx_http_oidc_provider_param,
       0,
       0,
@@ -338,6 +354,16 @@ ngx_http_oidc_provider(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
                            &p->name);
         return NGX_CONF_ERROR;
     }
+    if (p->backchannel_logout_uri.len > 0
+        && (p->backchannel_logout_uri.data[0] != '/'
+            || (p->backchannel_logout_uri.len > 1
+                && p->backchannel_logout_uri.data[1] == '/')))
+    {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "oidc_provider \"%V\": backchannel_logout_uri must be a local path",
+                           &p->name);
+        return NGX_CONF_ERROR;
+    }
 
     return NGX_CONF_OK;
 }
@@ -414,6 +440,10 @@ ngx_http_oidc_provider_param(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
                                "userinfo must be \"on\" or \"off\"");
             return NGX_CONF_ERROR;
         }
+    } else if (cmd->name.len == 22
+               && ngx_strncmp(cmd->name.data, "backchannel_logout_uri", 22) == 0)
+    {
+        p->backchannel_logout_uri = value[1];
     } else if (cmd->name.len == 15
                && ngx_strncmp(cmd->name.data, "session_max_age", 15) == 0)
     {
@@ -550,6 +580,15 @@ ngx_http_oidc_access_handler(ngx_http_request_t *r)
                        p->logout_uri.len) == 0)
     {
         return ngx_http_oidc_logout(r, p);
+    }
+
+    /* backchannel logout (IdP -> RP, no browser session) */
+    if (p->backchannel_logout_uri.len > 0
+        && r->uri.len == p->backchannel_logout_uri.len
+        && ngx_strncmp(r->uri.data, p->backchannel_logout_uri.data,
+                       p->backchannel_logout_uri.len) == 0)
+    {
+        return ngx_http_oidc_backchannel(r, p);
     }
 
     /* validate existing session */
@@ -1124,9 +1163,21 @@ ngx_http_oidc_issue_session(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p, ngx_str_t *id_token, ngx_str_t *claims,
     ngx_str_t *userinfo, ngx_str_t *refresh_token, time_t access_expires)
 {
-    ngx_str_t  userinfo_b64, session, cookie, refresh_blob, exp_s;
+    ngx_str_t  userinfo_b64, session, cookie, refresh_blob, exp_s, sid, sub;
     u_char    *q;
     time_t     exp, max_age;
+
+    ngx_str_null(&sid);
+    if (ngx_http_oidc_json_get_string(claims,
+            &(ngx_str_t) ngx_string("sub"), &sub) != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
+    if (ngx_http_oidc_json_get_string(claims,
+            &(ngx_str_t) ngx_string("sid"), &sid) != NGX_OK)
+    {
+        ngx_str_null(&sid);
+    }
 
     if (ngx_http_oidc_json_get_string(claims,
             &(ngx_str_t) ngx_string("exp"), &exp_s) != NGX_OK)
@@ -1165,7 +1216,7 @@ ngx_http_oidc_issue_session(ngx_http_request_t *r,
             || ngx_http_oidc_session_db_store(r, p, &cookie, &refresh_blob,
                                                access_expires,
                                                ngx_time() + max_age,
-                                               &session_id) != NGX_OK)
+                                               &sid, &sub, &session_id) != NGX_OK)
         {
             return NGX_ERROR;
         }
@@ -1445,10 +1496,13 @@ ngx_http_oidc_session_db_open(ngx_http_oidc_provider_t *p, ngx_log_t *log)
     if (sqlite3_exec(p->session_db, "PRAGMA journal_mode=WAL;"
         "CREATE TABLE IF NOT EXISTS oidc_sessions ("
         "id TEXT PRIMARY KEY, session BLOB NOT NULL, refresh_token BLOB, "
-        "access_expires_at INTEGER, expires_at INTEGER NOT NULL);"
+        "access_expires_at INTEGER, expires_at INTEGER NOT NULL, "
+        "sid TEXT, sub TEXT);"
         /* ponytail: no column migration; delete the db file when upgrading
-         * from a pre-refresh schema */
-        "CREATE INDEX IF NOT EXISTS oidc_sessions_expiry ON oidc_sessions(expires_at);",
+         * from a pre-refresh/pre-backchannel schema */
+        "CREATE INDEX IF NOT EXISTS oidc_sessions_expiry ON oidc_sessions(expires_at);"
+        "CREATE INDEX IF NOT EXISTS oidc_sessions_sid ON oidc_sessions(sid);"
+        "CREATE INDEX IF NOT EXISTS oidc_sessions_sub ON oidc_sessions(sub);",
         NULL, NULL, NULL) != SQLITE_OK)
     {
         ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: SQLite schema setup failed: %s",
@@ -1463,7 +1517,7 @@ ngx_http_oidc_session_db_open(ngx_http_oidc_provider_t *p, ngx_log_t *log)
 static ngx_int_t
 ngx_http_oidc_session_db_store(ngx_http_request_t *r, ngx_http_oidc_provider_t *p,
     ngx_str_t *session, ngx_str_t *refresh_token, time_t access_expires,
-    time_t expires, ngx_str_t *cookie)
+    time_t expires, ngx_str_t *sid, ngx_str_t *sub, ngx_str_t *cookie)
 {
     sqlite3_stmt  *stmt = NULL;
     ngx_str_t  random;
@@ -1476,7 +1530,7 @@ ngx_http_oidc_session_db_store(ngx_http_request_t *r, ngx_http_oidc_provider_t *
         return NGX_ERROR;
     }
     rc = sqlite3_prepare_v2(p->session_db,
-        "INSERT INTO oidc_sessions(id, session, refresh_token, access_expires_at, expires_at) VALUES(?, ?, ?, ?, ?)",
+        "INSERT INTO oidc_sessions(id, session, refresh_token, access_expires_at, expires_at, sid, sub) VALUES(?, ?, ?, ?, ?, ?, ?)",
         -1, &stmt, NULL);
     if (rc != SQLITE_OK
         || sqlite3_bind_text(stmt, 1, (const char *) cookie->data, cookie->len,
@@ -1487,6 +1541,10 @@ ngx_http_oidc_session_db_store(ngx_http_request_t *r, ngx_http_oidc_provider_t *
                              SQLITE_TRANSIENT) != SQLITE_OK
         || sqlite3_bind_int64(stmt, 4, access_expires) != SQLITE_OK
         || sqlite3_bind_int64(stmt, 5, expires) != SQLITE_OK
+        || sqlite3_bind_text(stmt, 6, (const char *) sid->data, sid->len,
+                             SQLITE_TRANSIENT) != SQLITE_OK
+        || sqlite3_bind_text(stmt, 7, (const char *) sub->data, sub->len,
+                             SQLITE_TRANSIENT) != SQLITE_OK
         || sqlite3_step(stmt) != SQLITE_DONE)
     {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "oidc: SQLite insert failed: %s",
@@ -1637,6 +1695,241 @@ fail:
     if (stmt) sqlite3_finalize(stmt);
     sqlite3_exec(p->session_db, "ROLLBACK", NULL, NULL, NULL);
     return NGX_ERROR;
+}
+
+static ngx_int_t
+ngx_http_oidc_get_body_arg(ngx_http_request_t *r, ngx_str_t *name,
+    ngx_str_t *value)
+{
+    ngx_chain_t  *cl;
+    u_char       *p, *end, *vstart, *vend, *dst;
+    size_t        len = 0;
+    ngx_str_t     body;
+
+    if (r->request_body == NULL || r->request_body->bufs == NULL) {
+        return NGX_DECLINED;
+    }
+
+    for (cl = r->request_body->bufs; cl; cl = cl->next) {
+        len += ngx_buf_size(cl->buf);
+    }
+    if (len == 0) {
+        return NGX_DECLINED;
+    }
+    body.data = ngx_pnalloc(r->pool, len);
+    if (body.data == NULL) {
+        return NGX_ERROR;
+    }
+    p = body.data;
+    for (cl = r->request_body->bufs; cl; cl = cl->next) {
+        p = ngx_cpymem(p, cl->buf->pos, ngx_buf_size(cl->buf));
+    }
+    body.len = len;
+
+    p = body.data;
+    end = body.data + body.len;
+    while (p < end) {
+        vstart = (p == body.data || *(p - 1) == '&') ? p : NULL;
+        vend = p;
+        while (vend < end && *vend != '=' && *vend != '&') {
+            vend++;
+        }
+        if (vstart != NULL && vend < end && *vend == '='
+            && (size_t) (vend - vstart) == name->len
+            && ngx_strncmp(vstart, name->data, name->len) == 0)
+        {
+            vstart = vend + 1;
+            vend = vstart;
+            while (vend < end && *vend != '&') {
+                vend++;
+            }
+            dst = ngx_pnalloc(r->pool, vend - vstart + 1);
+            if (dst == NULL) {
+                return NGX_ERROR;
+            }
+            value->data = dst;
+            ngx_unescape_uri(&dst, &vstart, vend - vstart, 0);
+            value->len = dst - value->data;
+            return NGX_OK;
+        }
+        p = vend < end ? vend + 1 : end;
+    }
+
+    return NGX_DECLINED;
+}
+
+static ngx_int_t
+ngx_http_oidc_session_db_delete_sub(ngx_http_oidc_provider_t *p, ngx_str_t *sid,
+    ngx_str_t *sub, ngx_log_t *log)
+{
+    sqlite3_stmt  *stmt = NULL;
+    const char  *sql;
+
+    if (ngx_http_oidc_session_db_open(p, log) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (sid->len > 0) {
+        sql = "DELETE FROM oidc_sessions WHERE sid = ?";
+    } else {
+        sql = "DELETE FROM oidc_sessions WHERE sub = ?";
+    }
+
+    if (sqlite3_prepare_v2(p->session_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return NGX_ERROR;
+    }
+    if (sid->len > 0) {
+        sqlite3_bind_text(stmt, 1, (const char *) sid->data, sid->len,
+                          SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_text(stmt, 1, (const char *) sub->data, sub->len,
+                          SQLITE_TRANSIENT);
+    }
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        return NGX_ERROR;
+    }
+    sqlite3_finalize(stmt);
+    return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_oidc_backchannel(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
+{
+    ngx_http_oidc_request_ctx_t  *ctx;
+
+    if (!(r->method & NGX_HTTP_POST)) {
+        return NGX_HTTP_NOT_ALLOWED;
+    }
+
+    ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_oidc_request_ctx_t));
+    if (ctx == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ctx->provider = p;
+    ngx_http_set_ctx(r, ctx, ngx_http_oidc_module);
+
+    {
+        ngx_int_t rc = ngx_http_read_client_request_body(r,
+                                             ngx_http_oidc_backchannel_done);
+        if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
+            return rc;
+        }
+    }
+
+    return NGX_DONE;
+}
+
+static void
+ngx_http_oidc_backchannel_done(ngx_http_request_t *r)
+{
+    ngx_http_oidc_request_ctx_t  *ctx;
+    ngx_http_oidc_provider_t    *p;
+    ngx_str_t  token = ngx_null_string, sid, sub, claims;
+    ngx_uint_t  status = NGX_HTTP_OK;
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_oidc_module);
+    p = ctx != NULL ? ctx->provider : NULL;
+    if (p == NULL) {
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
+    if (ngx_http_oidc_get_body_arg(r, &(ngx_str_t) ngx_string("logout_token"),
+                                   &token) != NGX_OK
+        || token.len == 0)
+    {
+        status = NGX_HTTP_BAD_REQUEST;
+    }
+
+    if (status == NGX_HTTP_OK
+        && p->jwks.len == 0
+        && ngx_http_oidc_fetch_jwks(p, r->connection->log) != NGX_OK)
+    {
+        status = NGX_HTTP_BAD_REQUEST;
+    }
+
+    if (status == NGX_HTTP_OK
+        && ngx_http_oidc_jwt_verify(r->connection->log, &token, &p->jwks,
+                                    &p->issuer, &p->client_id, NULL, 0,
+                                    &claims) != NGX_OK)
+    {
+        status = NGX_HTTP_BAD_REQUEST;
+    }
+
+    /* spec: logout token must not carry nonce */
+    if (status == NGX_HTTP_OK
+        && ngx_http_oidc_json_has_key(&claims,
+                &(ngx_str_t) ngx_string("nonce")) == NGX_OK)
+    {
+        status = NGX_HTTP_BAD_REQUEST;
+    }
+
+    if (status == NGX_HTTP_OK
+        && ngx_http_oidc_json_object_has_key(&claims,
+                &(ngx_str_t) ngx_string("events"),
+                &(ngx_str_t)
+                ngx_string("http://schemas.openid.net/event/backchannel-logout"))
+           != NGX_OK)
+    {
+        status = NGX_HTTP_BAD_REQUEST;
+    }
+
+    ngx_str_null(&sid);
+    ngx_str_null(&sub);
+    if (status == NGX_HTTP_OK) {
+        if (ngx_http_oidc_json_get_string(&claims,
+                &(ngx_str_t) ngx_string("sid"), &sid) != NGX_OK)
+        {
+            ngx_str_null(&sid);
+        }
+        if (ngx_http_oidc_json_get_string(&claims,
+                &(ngx_str_t) ngx_string("sub"), &sub) != NGX_OK)
+        {
+            ngx_str_null(&sub);
+        }
+        if (sid.len == 0 && sub.len == 0) {
+            status = NGX_HTTP_BAD_REQUEST;
+        } else {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                          "oidc: backchannel logout (sid=%V sub=%V)",
+                          &sid, &sub);
+            if (ngx_http_oidc_session_db_delete_sub(p, &sid, &sub,
+                                                    r->connection->log)
+                != NGX_OK)
+            {
+                status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
+        }
+    }
+
+    if (status != NGX_HTTP_OK) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "oidc: backchannel logout rejected");
+    }
+
+    r->headers_out.status = status;
+    r->headers_out.content_length_n = 0;
+    {
+        ngx_buf_t   *b;
+        ngx_chain_t  out;
+
+        r->headers_out.status = status;
+        r->headers_out.content_length_n = 0;
+        if (ngx_http_send_header(r) == NGX_ERROR) {
+            ngx_http_finalize_request(r, NGX_ERROR);
+            return;
+        }
+        b = ngx_calloc_buf(r->pool);
+        if (b == NULL) {
+            ngx_http_finalize_request(r, NGX_ERROR);
+            return;
+        }
+        b->last_buf = 1;
+        out.buf = b;
+        out.next = NULL;
+        ngx_http_finalize_request(r, ngx_http_output_filter(r, &out));
+    }
 }
 
 static void

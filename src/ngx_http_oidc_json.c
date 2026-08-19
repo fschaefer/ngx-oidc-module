@@ -46,6 +46,42 @@ ngx_http_oidc_json_get_string(ngx_str_t *json, ngx_str_t *key, ngx_str_t *out)
 }
 
 ngx_int_t
+ngx_http_oidc_json_has_key(ngx_str_t *json, ngx_str_t *key)
+{
+    json_t  *root, *value;
+    ngx_int_t  rc;
+
+    if (ngx_http_oidc_json_load(json, &root) != NGX_OK) {
+        return NGX_DECLINED;
+    }
+    value = json_object_getn(root, (const char *) key->data, key->len);
+    rc = (value && !json_is_null(value)) ? NGX_OK : NGX_DECLINED;
+    json_decref(root);
+    return rc;
+}
+
+ngx_int_t
+ngx_http_oidc_json_object_has_key(ngx_str_t *json, ngx_str_t *key,
+    ngx_str_t *member)
+{
+    json_t  *root, *obj, *value;
+    ngx_int_t  rc;
+
+    if (ngx_http_oidc_json_load(json, &root) != NGX_OK) {
+        return NGX_DECLINED;
+    }
+    obj = json_object_getn(root, (const char *) key->data, key->len);
+    if (!json_is_object(obj)) {
+        json_decref(root);
+        return NGX_DECLINED;
+    }
+    value = json_object_getn(obj, (const char *) member->data, member->len);
+    rc = (value && !json_is_null(value)) ? NGX_OK : NGX_DECLINED;
+    json_decref(root);
+    return rc;
+}
+
+ngx_int_t
 ngx_http_oidc_json_array_contains(ngx_str_t *json, ngx_str_t *key,
     ngx_str_t *needle)
 {

@@ -14,7 +14,7 @@ Minimal nginx dynamic module for OpenID Connect Authorization Code Flow.
 - SQLite-backed opaque sessions surviving nginx restart
 - Refresh-token rotation with atomic SQLite transactions (server-side only)
 - Optional UserInfo lookup with `sub` binding
-- Local and RP-initiated logout
+- Local, RP-initiated, and OIDC Backchannel Logout
 - Provider-specific session/state cookies for multi-IdP deployments
 - Original local request path and query restored after callback
 
@@ -23,7 +23,7 @@ Minimal nginx dynamic module for OpenID Connect Authorization Code Flow.
 Not implemented:
 
 - Clustered/multi-host session storage
-- Backchannel/frontchannel logout
+- Frontchannel logout
 - Token revocation
 
 ## Build
@@ -71,6 +71,7 @@ http {
         redirect_uri /_oidc_callback;
         logout_uri /logout;
         post_logout_uri https://app.example.com/;
+        backchannel_logout_uri /_oidc_backchannel;
 
         userinfo on;
         session_max_age 8h;
@@ -98,7 +99,7 @@ http {
 }
 ```
 
-`client_id` and `client_secret` are mandatory. `redirect_uri` and `logout_uri` must be local paths. `session_max_age` must be positive.
+`client_id` and `client_secret` are mandatory. `redirect_uri`, `logout_uri`, and `backchannel_logout_uri` must be local paths. `session_max_age` must be positive.
 
 ## Directives
 
@@ -119,6 +120,7 @@ Provider block in `http` context.
 | `redirect_uri <path>` | No | Local callback path. Default: `/_oidc_callback`. |
 | `logout_uri <path>` | No | Local logout path. |
 | `post_logout_uri <url>` | No | Redirect target after IdP logout. |
+| `backchannel_logout_uri <path>` | No | Local IdP POST endpoint for OIDC Backchannel Logout. Requires `session_store` for session revocation. |
 | `userinfo on\|off` | No | Fetch UserInfo during callback. Default: `off`. |
 | `session_max_age <duration>` | No | Extra session ceiling, capped by ID-token expiry. |
 | `session_cookie <name>` | No | Session cookie name. Use one per provider on same domain. |
@@ -173,6 +175,10 @@ Requires `session_store`. Refresh tokens never reach the browser; they are AES-2
 
 Absolute session lifetime stays capped by `session_max_age`/ID-token `exp`; refresh does not extend it.
 
+### Backchannel Logout
+
+Set `backchannel_logout_uri` and register its public HTTPS URL at IdP. IdP `POST`s form field `logout_token`; module validates signature, issuer, audience, expiry, Backchannel Logout event, and absence of `nonce`. With `session_store`, matching session rows are deleted: `sid` targets one session; `sub` is fallback and deletes all sessions for user. Endpoint returns `200` on accepted token and `400` on invalid token.
+
 For provider `company_idp` with:
 
 ```nginx
@@ -189,7 +195,7 @@ Requires Docker and Docker Compose.
 ./test/e2e.sh
 ```
 
-Test covers build, discovery, PKCE, JWKS rotation, `aud` array plus `azp`, `max_age` plus `auth_time`, UserInfo, encrypted cookie, expiry, original URI restore, session survival across nginx restart, forced refresh-token rotation, and RP logout.
+Test covers build, discovery, PKCE, JWKS rotation, `aud` array plus `azp`, `max_age` plus `auth_time`, UserInfo, encrypted cookie, expiry, original URI restore, session survival across nginx restart, forced refresh-token rotation, RP logout, and Backchannel Logout session revocation.
 
 ## Security Notes
 
@@ -197,6 +203,6 @@ Test covers build, discovery, PKCE, JWKS rotation, `aud` array plus `azp`, `max_
 - Keep `client_secret` and `session_encryption_key` outside version control. Generate final nginx config from your deployment secret manager; nginx does not expand `${...}` in these directive values.
 - Use a dedicated `session_cookie` for every provider sharing a domain.
 - Keep UserInfo claims small; session cookie limit is intentional.
-- `post_logout_uri` must be registered at IdP.
+- `post_logout_uri` and public `backchannel_logout_uri` must be registered at IdP. Backchannel endpoint must be reachable by IdP over HTTPS.
 - SQLite is single-host storage. Do not use it across load-balanced nginx nodes or NFS.
 - Delete the SQLite file when upgrading across module versions that change the session schema; old rows are not migrated.

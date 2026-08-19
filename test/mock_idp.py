@@ -50,12 +50,31 @@ def make_id_token(code: str, nonce: str) -> str:
         "iat": now,
         "auth_time": now,
         "nonce": nonce,
+        "sid": "mock-session-1",
         "email": "jane@example.com",
         "name": "Jane Doe",
     }
     signing_input = b64url(json.dumps(header).encode()) + "." + b64url(json.dumps(payload).encode())
     sig = rsa.sign(signing_input.encode(), key, "SHA-256")
     return signing_input + "." + b64url(sig)
+
+def make_logout_token() -> str:
+    """OIDC Back-Channel Logout Token (RFC-compatible JWT)."""
+    now = int(time.time())
+    header = {"alg": "RS256", "kid": "test-key-1", "typ": "logout+jwt"}
+    payload = {
+        "iss": ISSUER,
+        "aud": "test-client",
+        "iat": now,
+        "exp": now + 60,
+        "sid": "mock-session-1",
+        "sub": "user-12345",
+        "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+    }
+    signing_input = b64url(json.dumps(header).encode()) + "." + b64url(json.dumps(payload).encode())
+    sig = rsa.sign(signing_input.encode(), key, "SHA-256")
+    return signing_input + "." + b64url(sig)
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -80,6 +99,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "userinfo_endpoint": ISSUER + "/userinfo",
                 "end_session_endpoint": ISSUER + "/logout",
             })
+        elif parsed.path == "/logout-token":
+            body = make_logout_token().encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif parsed.path == "/jwks":
             Handler.jwks_requests += 1
             self._json(OLD_JWKS if Handler.jwks_requests == 1 else JWKS)
