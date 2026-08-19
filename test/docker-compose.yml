@@ -1,0 +1,28 @@
+services:
+  idp:
+    build:
+      context: .
+      dockerfile: Dockerfile.idp
+    networks:
+      oidc:
+        aliases:
+          - idp.test
+    ports:
+      - "8443:8443"
+
+  nginx:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    volumes:
+      - ./nginx.conf:/usr/local/nginx/conf/nginx.conf:ro
+      - ./certs:/certs:ro
+    ports:
+      - "8081:80"
+    depends_on:
+      - idp
+    networks:
+      - oidc
+
+networks:
+  oidc:
