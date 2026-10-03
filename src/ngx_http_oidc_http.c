@@ -397,7 +397,7 @@ ngx_http_oidc_http_post_form(ngx_log_t *log, ngx_str_t *url,
     p = ngx_cpymem(p, " HTTP/1.1\r\nHost: ", 17);
     p = ngx_cpymem(p, u.host.data, u.host.len);
     p = ngx_cpymem(p, "\r\nContent-Type: application/x-www-form-urlencoded\r\n",
-                   51);
+                   sizeof("\r\nContent-Type: application/x-www-form-urlencoded\r\n") - 1);
     p = ngx_sprintf(p, "Content-Length: %uz\r\n", body->len);
     if (auth_header) {
         p = ngx_cpymem(p, "Authorization: ", 15);
