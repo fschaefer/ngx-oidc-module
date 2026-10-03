@@ -1383,14 +1383,31 @@ ngx_http_oidc_redirect(ngx_http_request_t *r, ngx_str_t *url)
 static ngx_int_t
 ngx_http_oidc_logout(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
 {
-    ngx_str_t  redirect_uri, redirect_uri_enc, url;
-    u_char    *q;
+    ngx_str_t  redirect_uri, redirect_uri_enc, id_token, id_token_enc, url;
+    u_char    *q, *dot;
+    ngx_flag_t  have_id_token = 0;
 
     {
         ngx_str_t  cookie;
         if (p->session_store.len > 0
             && ngx_http_oidc_get_cookie(r, &p->cookie_name, &cookie) == NGX_OK)
         {
+            ngx_str_t  session, refresh_blob;
+            time_t     access_expires;
+
+            if (ngx_http_oidc_session_db_load(r, p, &cookie, &session,
+                                              &refresh_blob, &access_expires) == NGX_OK
+                && ngx_http_oidc_session_decrypt(r->pool, p, &session, &session)
+                   == NGX_OK)
+            {
+                dot = session.data + session.len;
+                while (dot > session.data && *--dot != '.') { }
+                if (dot > session.data) {
+                    id_token.data = session.data;
+                    id_token.len = dot - session.data;
+                    have_id_token = 1;
+                }
+            }
             ngx_http_oidc_revoke_refresh_token(r, p, &cookie);
             ngx_http_oidc_session_db_delete(p, &cookie);
         }
@@ -1428,8 +1445,21 @@ ngx_http_oidc_logout(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
         redirect_uri.data, redirect_uri.len, NGX_ESCAPE_URI_COMPONENT)
         - redirect_uri_enc.data;
 
+    if (have_id_token) {
+        id_token_enc.data = ngx_pnalloc(r->pool, id_token.len * 3);
+        if (id_token_enc.data == NULL) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+        id_token_enc.len = (u_char *) ngx_escape_uri(id_token_enc.data,
+            id_token.data, id_token.len, NGX_ESCAPE_URI_COMPONENT)
+            - id_token_enc.data;
+    }
+
     url.len = p->end_session_endpoint.len + sizeof("?post_logout_redirect_uri=")
               - 1 + redirect_uri_enc.len;
+    if (have_id_token) {
+        url.len += sizeof("&id_token_hint=") - 1 + id_token_enc.len;
+    }
     url.data = ngx_pnalloc(r->pool, url.len);
     if (url.data == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -1438,6 +1468,10 @@ ngx_http_oidc_logout(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
                    p->end_session_endpoint.len);
     q = ngx_cpymem(q, "?post_logout_redirect_uri=", 26);
     q = ngx_cpymem(q, redirect_uri_enc.data, redirect_uri_enc.len);
+    if (have_id_token) {
+        q = ngx_cpymem(q, "&id_token_hint=", 15);
+        q = ngx_cpymem(q, id_token_enc.data, id_token_enc.len);
+    }
     url.len = q - url.data;
 
     return ngx_http_oidc_redirect(r, &url);

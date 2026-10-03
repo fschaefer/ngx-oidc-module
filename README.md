@@ -177,7 +177,7 @@ Absolute session lifetime stays capped by `session_max_age`/ID-token `exp`; refr
 
 ### Token revocation
 
-At RP logout, module reads encrypted refresh token from SQLite and calls IdP discovery `revocation_endpoint` per RFC 7009 with `token_type_hint=refresh_token` and client Basic authentication. Missing endpoint, discovery failure, or revocation failure is logged and does not block local logout: browser cookie and SQLite session are still deleted.
+At RP logout, module reads encrypted ID and refresh tokens from SQLite, calls IdP discovery `revocation_endpoint` per RFC 7009 with `token_type_hint=refresh_token` and client Basic authentication, then redirects to `end_session_endpoint` with `post_logout_redirect_uri` and `id_token_hint`. Missing endpoint, discovery failure, or revocation failure is logged and does not block local logout: browser cookie and SQLite session are still deleted.
 
 ### Backchannel Logout
 
