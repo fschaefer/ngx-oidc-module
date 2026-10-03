@@ -201,6 +201,32 @@ Requires Docker and Docker Compose.
 
 Mock E2E covers build, discovery, PKCE, JWKS rotation, `aud` array plus `azp`, `max_age` plus `auth_time`, UserInfo, encrypted cookie, expiry, original URI restore, session survival across nginx restart, forced refresh-token rotation, RFC 7009 revocation plus `id_token_hint` at RP logout, Backchannel Logout session revocation, and two providers sharing one SQLite file without sharing browser cookies or authorization.
 
+### Browser test with Keycloak
+
+Runs Nginx, a minimal Python backend, and Keycloak. This uses a real authorization page instead of the automatic mock-IdP redirect.
+
+```sh
+./test/keycloak-up.sh
+```
+
+Map both names to Docker host before opening the app:
+
+```text
+127.0.0.1 app.test keycloak.test
+```
+
+Open `http://app.test/`. Keycloak login appears at `https://keycloak.test:8443`. Trust `test/certs/ca.crt` in browser or accept its test-certificate warning. Log in as `jane` with password `jane-password`. Backend response contains Keycloak ID-token claims.
+
+Open `http://app.test/logout` to test RP logout. Nginx removes its SQLite session, sends Keycloak `id_token_hint`, and returns to `http://app.test/`. That route is protected, so Keycloak login appears again; this confirms the local and Keycloak sessions ended.
+
+Stop stack:
+
+```sh
+docker compose -f test/docker-compose.keycloak.yml down
+```
+
+On Apple Silicon, Keycloak runs as `linux/amd64` because current native image crashes during JVM startup. First start under emulation takes roughly one minute.
+
 ## Security Notes
 
 - Use HTTPS in production. Cookie `Secure` is applied only to HTTPS connections.

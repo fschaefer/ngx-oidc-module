@@ -1,0 +1,39 @@
+services:
+  keycloak:
+    platform: linux/amd64
+    image: quay.io/keycloak/keycloak:26.1.4
+    command: start-dev --import-realm --hostname https://keycloak.test:8443 --hostname-strict=false --https-certificate-file=/opt/keycloak/conf/tls.crt --https-certificate-key-file=/opt/keycloak/conf/tls.key
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-password
+    volumes:
+      - ./keycloak-realm.json:/opt/keycloak/data/import/oidc-test.json:ro
+      - ./certs/keycloak.crt:/opt/keycloak/conf/tls.crt:ro
+      - ./certs/keycloak.key:/opt/keycloak/conf/tls.key:ro
+    ports:
+      - "8443:8443"
+    networks:
+      oidc:
+        aliases: [keycloak.test]
+
+  app:
+    image: python:3.12-slim
+    command: python3 /app/app.py
+    volumes:
+      - ./app.py:/app/app.py:ro
+    networks: [oidc]
+
+  nginx:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    volumes:
+      - ./nginx-keycloak.conf:/usr/local/nginx/conf/nginx.conf:ro
+      - ./certs:/certs:ro
+    ports:
+      - "80:80"
+    depends_on: [keycloak, app]
+    networks: [oidc]
+
+networks:
+  oidc:

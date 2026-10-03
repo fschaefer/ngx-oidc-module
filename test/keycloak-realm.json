@@ -1,0 +1,33 @@
+{
+  "realm": "oidc-test",
+  "enabled": true,
+  "sslRequired": "none",
+  "clients": [
+    {
+      "clientId": "nginx-oidc",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "nginx-oidc-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://app.test/*"],
+      "webOrigins": ["http://app.test"],
+      "attributes": {
+        "post.logout.redirect.uris": "http://app.test/*"
+      },
+      "defaultClientScopes": ["profile", "email", "roles", "web-origins"]
+    }
+  ],
+  "users": [
+    {
+      "username": "jane",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Jane",
+      "lastName": "Doe",
+      "email": "jane@example.com",
+      "credentials": [{"type": "password", "value": "jane-password", "temporary": false}]
+    }
+  ]
+}
