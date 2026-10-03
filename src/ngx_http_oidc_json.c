@@ -10,6 +10,20 @@ ngx_http_oidc_json_load(ngx_str_t *json, json_t **root)
     return *root ? NGX_OK : NGX_DECLINED;
 }
 
+static json_t *
+ngx_http_oidc_json_object_get(json_t *object, ngx_str_t *key)
+{
+    u_char  *name;
+
+    name = ngx_pnalloc(ngx_cycle->pool, key->len + 1);
+    if (name == NULL) {
+        return NULL;
+    }
+    ngx_memcpy(name, key->data, key->len);
+    name[key->len] = '\0';
+    return json_object_get(object, (const char *) name);
+}
+
 ngx_int_t
 ngx_http_oidc_json_get_string(ngx_str_t *json, ngx_str_t *key, ngx_str_t *out)
 {
@@ -19,7 +33,7 @@ ngx_http_oidc_json_get_string(ngx_str_t *json, ngx_str_t *key, ngx_str_t *out)
     if (ngx_http_oidc_json_load(json, &root) != NGX_OK) {
         return NGX_DECLINED;
     }
-    value = json_object_getn(root, (const char *) key->data, key->len);
+    value = ngx_http_oidc_json_object_get(root, key);
     if (json_is_string(value)) {
         string = json_string_value(value);
         out->len = json_string_length(value);
@@ -54,7 +68,7 @@ ngx_http_oidc_json_has_key(ngx_str_t *json, ngx_str_t *key)
     if (ngx_http_oidc_json_load(json, &root) != NGX_OK) {
         return NGX_DECLINED;
     }
-    value = json_object_getn(root, (const char *) key->data, key->len);
+    value = ngx_http_oidc_json_object_get(root, key);
     rc = (value && !json_is_null(value)) ? NGX_OK : NGX_DECLINED;
     json_decref(root);
     return rc;
@@ -70,12 +84,12 @@ ngx_http_oidc_json_object_has_key(ngx_str_t *json, ngx_str_t *key,
     if (ngx_http_oidc_json_load(json, &root) != NGX_OK) {
         return NGX_DECLINED;
     }
-    obj = json_object_getn(root, (const char *) key->data, key->len);
+    obj = ngx_http_oidc_json_object_get(root, key);
     if (!json_is_object(obj)) {
         json_decref(root);
         return NGX_DECLINED;
     }
-    value = json_object_getn(obj, (const char *) member->data, member->len);
+    value = ngx_http_oidc_json_object_get(obj, member);
     rc = (value && !json_is_null(value)) ? NGX_OK : NGX_DECLINED;
     json_decref(root);
     return rc;
@@ -91,7 +105,7 @@ ngx_http_oidc_json_array_contains(ngx_str_t *json, ngx_str_t *key,
     if (ngx_http_oidc_json_load(json, &root) != NGX_OK) {
         return NGX_DECLINED;
     }
-    array = json_object_getn(root, (const char *) key->data, key->len);
+    array = ngx_http_oidc_json_object_get(root, key);
     if (!json_is_array(array)) {
         json_decref(root);
         return NGX_DECLINED;
