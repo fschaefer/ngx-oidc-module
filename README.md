@@ -199,7 +199,7 @@ Requires Docker and Docker Compose.
 ./test/e2e.sh
 ```
 
-Test covers build, discovery, PKCE, JWKS rotation, `aud` array plus `azp`, `max_age` plus `auth_time`, UserInfo, encrypted cookie, expiry, original URI restore, session survival across nginx restart, forced refresh-token rotation, RFC 7009 revocation at RP logout, and Backchannel Logout session revocation.
+Mock E2E covers build, discovery, PKCE, JWKS rotation, `aud` array plus `azp`, `max_age` plus `auth_time`, UserInfo, encrypted cookie, expiry, original URI restore, session survival across nginx restart, forced refresh-token rotation, RFC 7009 revocation plus `id_token_hint` at RP logout, Backchannel Logout session revocation, and two providers sharing one SQLite file without sharing browser cookies or authorization.
 
 ## Security Notes
 

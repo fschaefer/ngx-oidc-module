@@ -71,13 +71,33 @@ $compose logs --no-color idp | grep -q 'POST /token HTTP/1.1" 200'
 refresh_grants=$($compose logs --no-color idp | grep -c 'POST /token HTTP/1.1" 200')
 [ "$refresh_grants" -ge 2 ]
 
+# primary session must not authorize a location bound to secondary_idp.
+secondary_code=$(docker run --rm --network test_oidc -v /tmp:/tmp \
+    curlimages/curl:8.10.1 --silent -o /dev/null -w '%{http_code}' \
+    --cookie /tmp/oidc-e2e-cookies --connect-to demo.example.com:80:nginx:80 \
+    http://demo.example.com/secondary)
+[ "$secondary_code" = "302" ]
+docker run --rm --network test_oidc -v /tmp:/tmp \
+    curlimages/curl:8.10.1 --insecure --fail --silent --show-error \
+    --location --max-redirs 5 --cookie-jar /tmp/oidc-e2e-cookies \
+    --cookie /tmp/oidc-e2e-cookies --connect-to demo.example.com:80:nginx:80 \
+    http://demo.example.com/secondary | grep -qx 'Hello, Jane Doe!'
+grep -q 'oidc_session_secondary_idp' /tmp/oidc-e2e-cookies
+
 docker run --rm --network test_oidc -v /tmp:/tmp \
     curlimages/curl:8.10.1 --insecure --silent --show-error --include \
     --cookie /tmp/oidc-e2e-cookies --connect-to demo.example.com:80:nginx:80 \
     http://demo.example.com/logout >"$cookies"
 grep -q 'Set-Cookie: oidc_session_my_idp=;' "$cookies"
 grep -q 'Location: https://idp.test:8443/logout?post_logout_redirect_uri=' "$cookies"
+grep -q '&id_token_hint=' "$cookies"
 $compose logs --no-color idp | grep -q 'POST /revoke HTTP/1.1" 200'
+
+# primary logout must not delete secondary_idp's cookie or SQLite session.
+docker run --rm --network test_oidc -v /tmp:/tmp \
+    curlimages/curl:8.10.1 --fail --silent --show-error \
+    --cookie /tmp/oidc-e2e-cookies --connect-to demo.example.com:80:nginx:80 \
+    http://demo.example.com/secondary | grep -qx 'Hello, Jane Doe!'
 
 # backchannel logout: IdP-side logout kills the server session
 rm -f /tmp/oidc-bc-cookies
