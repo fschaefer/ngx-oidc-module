@@ -66,7 +66,7 @@ http {
         session_store sqlite:/var/lib/nginx/oidc/sessions.db;
 
         ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
-        scopes openid profile email;
+        scopes "openid profile email";
 
         redirect_uri /_oidc_callback;
         logout_uri /logout;
@@ -99,7 +99,7 @@ http {
 }
 ```
 
-`client_id` and `client_secret` are mandatory. `redirect_uri`, `logout_uri`, and `backchannel_logout_uri` must be local paths. `session_max_age` must be positive.
+`client_id` and `client_secret` are mandatory. `redirect_uri`, `logout_uri`, and `backchannel_logout_uri` must be local paths. `scopes` is one quoted value. `session_max_age` must be positive.
 
 ## Directives
 
