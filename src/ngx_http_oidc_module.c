@@ -1027,8 +1027,7 @@ ngx_http_oidc_exchange_code(ngx_http_request_t *r,
         - redirect_uri_enc.data;
 
     /* build form body */
-    len = 80 + code->len + redirect_uri_enc.len + code_verifier->len
-          + p->client_id.len + p->client_secret.len;
+    len = 80 + code->len + redirect_uri_enc.len + code_verifier->len;
     body.data = ngx_pnalloc(r->pool, len);
     if (body.data == NULL) {
         return NGX_ERROR;
@@ -1039,10 +1038,6 @@ ngx_http_oidc_exchange_code(ngx_http_request_t *r,
     q = ngx_cpymem(q, redirect_uri_enc.data, redirect_uri_enc.len);
     q = ngx_cpymem(q, "&code_verifier=", 15);
     q = ngx_cpymem(q, code_verifier->data, code_verifier->len);
-    q = ngx_cpymem(q, "&client_id=", 11);
-    q = ngx_cpymem(q, p->client_id.data, p->client_id.len);
-    q = ngx_cpymem(q, "&client_secret=", 15);
-    q = ngx_cpymem(q, p->client_secret.data, p->client_secret.len);
     body.len = q - body.data;
 
     /* build basic auth header */
