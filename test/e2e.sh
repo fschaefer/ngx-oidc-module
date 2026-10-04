@@ -10,17 +10,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p certs
-if [ ! -f certs/ca.crt ]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-        -keyout certs/ca.key -out certs/ca.crt -subj '/CN=OIDC Test CA' >/dev/null 2>&1
-    openssl req -newkey rsa:2048 -nodes -keyout certs/idp.key -out /tmp/oidc-idp.csr \
-        -subj '/CN=idp.test' >/dev/null 2>&1
-    printf '%s\n' 'subjectAltName=DNS:idp.test' >/tmp/oidc-idp.ext
-    openssl x509 -req -days 1 -in /tmp/oidc-idp.csr -CA certs/ca.crt -CAkey certs/ca.key \
-        -CAcreateserial -extfile /tmp/oidc-idp.ext -out certs/idp.crt >/dev/null 2>&1
-    rm -f /tmp/oidc-idp.csr /tmp/oidc-idp.ext certs/ca.srl
-fi
+sh ./make-certs.sh
 
 $compose build nginx idp >/dev/null
 $compose up -d
@@ -30,7 +20,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
         --insecure --fail --silent https://idp.test:8443/.well-known/openid-configuration \
         >/dev/null \
         && docker run --rm --network test_oidc curlimages/curl:8.10.1 \
-        --silent http://nginx/ >/dev/null; then
+        --fail --silent http://nginx/ >/dev/null; then
         ready=1
         break
     fi

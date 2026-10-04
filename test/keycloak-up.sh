@@ -2,23 +2,7 @@
 set -eu
 
 cd "$(dirname "$0")"
-mkdir -p certs
-
-if [ ! -f certs/ca.crt ]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-        -keyout certs/ca.key -out certs/ca.crt -subj '/CN=OIDC Test CA'
-fi
-
-if [ ! -f certs/keycloak.crt ]; then
-    openssl req -newkey rsa:2048 -nodes \
-        -keyout certs/keycloak.key -out /tmp/oidc-keycloak.csr \
-        -subj '/CN=keycloak.test'
-    printf '%s\n' 'subjectAltName=DNS:keycloak.test' >/tmp/oidc-keycloak.ext
-    openssl x509 -req -days 1 -in /tmp/oidc-keycloak.csr \
-        -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial \
-        -extfile /tmp/oidc-keycloak.ext -out certs/keycloak.crt
-    rm -f /tmp/oidc-keycloak.csr /tmp/oidc-keycloak.ext certs/ca.srl
-fi
+sh ./make-certs.sh
 
 compose='docker compose -f docker-compose.keycloak.yml'
 $compose up --build --detach
