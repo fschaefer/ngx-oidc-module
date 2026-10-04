@@ -7,8 +7,8 @@ services:
       oidc:
         aliases:
           - idp.test
-    ports:
-      - "8443:8443"
+    # kein Port-Publish: der IdP wird nur aus dem Compose-Netz angesprochen
+    # (idp.test:8443), so kollidiert der Harness nicht mit anderen Diensten.
 
   nginx:
     build:

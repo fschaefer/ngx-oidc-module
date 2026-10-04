@@ -2,3 +2,5 @@ test/__pycache__/
 test/certs/*.crt
 test/certs/*.key
 test/certs/*.srl
+test/nginx-keycloak-remote.conf
+test/.tmp/
