@@ -1,5 +1,7 @@
 services:
   keycloak:
+    # Nur mit --profile idp starten; fuer einen externen IdP bleibt der Dienst aus.
+    profiles: ["idp"]
     platform: linux/amd64
     image: quay.io/keycloak/keycloak:26.1.4
     command: start-dev --import-realm --hostname https://keycloak.test:8443 --hostname-strict=false --https-certificate-file=/opt/keycloak/conf/tls.crt --https-certificate-key-file=/opt/keycloak/conf/tls.key
@@ -11,7 +13,7 @@ services:
       - ./certs/keycloak.crt:/opt/keycloak/conf/tls.crt:ro
       - ./certs/keycloak.key:/opt/keycloak/conf/tls.key:ro
     ports:
-      - "8443:8443"
+      - "${KC_TLS_PORT:-8443}:8443"
     networks:
       oidc:
         aliases: [keycloak.test]
@@ -28,11 +30,16 @@ services:
       context: ..
       dockerfile: Dockerfile
     volumes:
-      - ./nginx-keycloak.conf:/usr/local/nginx/conf/nginx.conf:ro
+      - ./${NGINX_CONF:-nginx-keycloak.conf}:/usr/local/nginx/conf/nginx.conf:ro
       - ./certs:/certs:ro
     ports:
-      - "80:80"
-    depends_on: [keycloak, app]
+      - "${APP_PORT:-80}:80"
+    depends_on:
+      app:
+        condition: service_started
+      keycloak:
+        condition: service_started
+        required: false
     networks:
       oidc:
         aliases: [app.test]

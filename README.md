@@ -223,10 +223,26 @@ Open `http://app.test/logout` to test RP logout. Nginx removes its SQLite sessio
 Stop stack:
 
 ```sh
-docker compose -f test/docker-compose.keycloak.yml down
+docker compose -f test/docker-compose.keycloak.yml --profile idp down
 ```
 
 On Apple Silicon, Keycloak runs as `linux/amd64` because current native image crashes during JVM startup. First start under emulation takes roughly one minute.
+### Against an external Keycloak
+
+The stack can also rely on an IdP that already runs elsewhere (for example a
+shared test Keycloak on another host). Only nginx and the backend are started;
+issuer and the IdP's CA come from the environment:
+
+```sh
+KC_ISSUER=https://idp.example:8443/realms/oidc-test \
+KC_CA=/path/to/idp-ca.crt ./test/keycloak-remote-e2e.sh
+```
+
+The template `test/nginx-keycloak-remote.conf.in` is rendered into
+`test/nginx-keycloak-remote.conf`, so no host name is baked into the repository.
+Nothing is published on port 80 here (`APP_PORT`, default 8099, only exists to
+reach the stack by hand); the flow itself runs on the compose network.
+
 ### Automated Keycloak flow
 
 ```sh

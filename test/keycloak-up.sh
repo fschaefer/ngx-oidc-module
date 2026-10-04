@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 sh ./make-certs.sh
 
 compose='docker compose -f docker-compose.keycloak.yml'
-$compose up --build --detach
+$compose --profile idp up --build --detach
 
 for _ in $(seq 1 90); do
     if curl --silent --fail --cacert certs/ca.crt \
