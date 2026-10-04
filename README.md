@@ -227,6 +227,18 @@ docker compose -f test/docker-compose.keycloak.yml down
 ```
 
 On Apple Silicon, Keycloak runs as `linux/amd64` because current native image crashes during JVM startup. First start under emulation takes roughly one minute.
+### Automated Keycloak flow
+
+```sh
+./test/keycloak-e2e.sh
+```
+
+Brings the stack up, drives login and RP logout from a container on the compose
+network, and asserts that the ID-token claims reach the backend, that the
+end-session redirect carries `id_token_hint`, and that the Keycloak session is
+gone afterwards. The stack is torn down again unless `KEEP=1` is set. No
+`/etc/hosts` entry is needed for this variant.
+
 
 ## Security Notes
 

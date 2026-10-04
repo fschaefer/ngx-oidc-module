@@ -33,7 +33,9 @@ services:
     ports:
       - "80:80"
     depends_on: [keycloak, app]
-    networks: [oidc]
+    networks:
+      oidc:
+        aliases: [app.test]
 
 networks:
   oidc:
