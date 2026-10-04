@@ -1481,7 +1481,7 @@ static ngx_int_t
 ngx_http_oidc_build_redirect_uri(ngx_http_request_t *r,
     ngx_http_oidc_provider_t *p, ngx_str_t *out)
 {
-    ngx_str_t  scheme;
+    ngx_str_t  scheme, host;
     u_char    *q;
     size_t     len;
 
@@ -1490,14 +1490,23 @@ ngx_http_oidc_build_redirect_uri(ngx_http_request_t *r,
         ngx_str_set(&scheme, "http");
     }
 
-    len = scheme.len + 3 + r->headers_in.server.len + p->redirect_uri.len;
+    /* headers_in.server carries no port; the raw Host header does. Providers
+     * compare redirect_uri exactly, so a listener on a non-default port needs
+     * "host:port" here. */
+    if (r->headers_in.host != NULL) {
+        host = r->headers_in.host->value;
+    } else {
+        host = r->headers_in.server;
+    }
+
+    len = scheme.len + 3 + host.len + p->redirect_uri.len;
     out->data = ngx_pnalloc(r->pool, len);
     if (out->data == NULL) {
         return NGX_ERROR;
     }
     q = ngx_cpymem(out->data, scheme.data, scheme.len);
     q = ngx_cpymem(q, "://", 3);
-    q = ngx_cpymem(q, r->headers_in.server.data, r->headers_in.server.len);
+    q = ngx_cpymem(q, host.data, host.len);
     q = ngx_cpymem(q, p->redirect_uri.data, p->redirect_uri.len);
     out->len = q - out->data;
 

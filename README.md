@@ -263,6 +263,8 @@ gone afterwards. The stack is torn down again unless `KEEP=1` is set. No
 - Use a dedicated `session_cookie` for every provider sharing a domain.
 - Keep UserInfo claims small; session cookie limit is intentional.
 - `post_logout_uri` and public `backchannel_logout_uri` must be registered at IdP. Backchannel endpoint must be reachable by IdP over HTTPS.
+- The callback URI is assembled from the request `Host` header, so a listener on a non-default port yields `host:port`; register exactly that URI at the IdP and keep `Host` intact when running behind another proxy.
+- For a supervised, non-test deployment (TLS, SQLite session volume, systemd unit) see `example/docker-service/`.
 - SQLite is single-host storage. Do not use it across load-balanced nginx nodes or NFS.
 - Delete the SQLite file when upgrading across module versions that change the session schema; old rows are not migrated.
 
