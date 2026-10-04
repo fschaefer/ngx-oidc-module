@@ -50,7 +50,7 @@ ngx_http_oidc_hmac_sha256(ngx_pool_t *pool, ngx_str_t *key, ngx_str_t *data,
 ngx_int_t
 ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_pool_t *pool, ngx_str_t *jwt,
     ngx_str_t *jwks, ngx_str_t *issuer, ngx_str_t *client_id, ngx_str_t *nonce,
-    time_t max_age,
+    time_t max_age, ngx_flag_t check_exp,
     ngx_str_t *claims_out)
 {
     u_char  *dot1, *dot2;
@@ -247,18 +247,22 @@ done:
         }
     }
 
-    /* validate claims: exp, iss, aud, nonce */
-    if (ngx_http_oidc_json_get_string(pool, &payload,
-            &(ngx_str_t) ngx_string("exp"), &exp_s) != NGX_OK)
-    {
-        ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: JWT missing exp");
-        return NGX_ERROR;
-    }
-    exp = ngx_atotm(exp_s.data, exp_s.len);
+    /* validate claims: exp, iss, aud, nonce. The exp check is skipped for
+     * session re-validation: the encrypted session carries its own expiry
+     * (session_max_age), so a short-lived ID token must not end the session. */
     now = ngx_time();
-    if (now >= exp) {
-        ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: JWT expired");
-        return NGX_ERROR;
+    if (check_exp) {
+        if (ngx_http_oidc_json_get_string(pool, &payload,
+                &(ngx_str_t) ngx_string("exp"), &exp_s) != NGX_OK)
+        {
+            ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: JWT missing exp");
+            return NGX_ERROR;
+        }
+        exp = ngx_atotm(exp_s.data, exp_s.len);
+        if (now >= exp) {
+            ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: JWT expired");
+            return NGX_ERROR;
+        }
     }
 
     if (ngx_http_oidc_json_get_string(pool, &payload,

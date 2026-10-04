@@ -91,7 +91,8 @@ ngx_int_t ngx_http_oidc_endpoint_matches_issuer(ngx_str_t *issuer,
 /* jwt.c */
 ngx_int_t ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_pool_t *pool,
     ngx_str_t *jwt, ngx_str_t *jwks, ngx_str_t *issuer, ngx_str_t *client_id,
-    ngx_str_t *nonce, time_t max_age, ngx_str_t *claims_out);
+    ngx_str_t *nonce, time_t max_age, ngx_flag_t check_exp,
+    ngx_str_t *claims_out);
 
 /* json.c */
 ngx_int_t ngx_http_oidc_json_get_string(ngx_pool_t *pool, ngx_str_t *json,

@@ -853,13 +853,13 @@ ngx_http_oidc_callback_handler(ngx_http_request_t *r)
     }
 
     rc = ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &id_token, &p->jwks,
-                                  &p->issuer, &p->client_id, &nonce, max_age, &claims);
+                                  &p->issuer, &p->client_id, &nonce, max_age, 1, &claims);
     if (rc == NGX_DECLINED) {
         p->jwks.len = 0;
         if (ngx_http_oidc_fetch_jwks(p, r->connection->log) == NGX_OK) {
             rc = ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &id_token,
                                            &p->jwks, &p->issuer, &p->client_id,
-                                           &nonce, max_age, &claims);
+                                           &nonce, max_age, 1, &claims);
         }
     }
     if (rc != NGX_OK) {
@@ -1196,7 +1196,7 @@ ngx_http_oidc_issue_session(ngx_http_request_t *r,
 {
     ngx_str_t  userinfo_b64, session, cookie, refresh_blob, exp_s, sid, sub;
     u_char    *q;
-    time_t     exp, max_age;
+    time_t     max_age;
 
     ngx_str_null(&sid);
     if (ngx_http_oidc_json_get_string(r->pool, claims,
@@ -1210,15 +1210,15 @@ ngx_http_oidc_issue_session(ngx_http_request_t *r,
         ngx_str_null(&sid);
     }
 
-    if (ngx_http_oidc_json_get_string(r->pool, claims,
-            &(ngx_str_t) ngx_string("exp"), &exp_s) != NGX_OK)
-    {
-        return NGX_ERROR;
-    }
-    exp = ngx_atotm(exp_s.data, exp_s.len);
-    max_age = exp - ngx_time();
-    if (p->session_max_age > 0 && max_age > p->session_max_age) {
+    if (p->session_max_age > 0) {
         max_age = p->session_max_age;
+    } else {
+        if (ngx_http_oidc_json_get_string(r->pool, claims,
+                &(ngx_str_t) ngx_string("exp"), &exp_s) != NGX_OK)
+        {
+            return NGX_ERROR;
+        }
+        max_age = ngx_atotm(exp_s.data, exp_s.len) - ngx_time();
     }
     if (max_age <= 0) {
         return NGX_ERROR;
@@ -1321,13 +1321,13 @@ ngx_http_oidc_validate_session(ngx_http_request_t *r,
         return NGX_DECLINED;
     }
     rc = ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &id_token, &p->jwks,
-                                  &p->issuer, &p->client_id, NULL, 0, claims_out);
+                                  &p->issuer, &p->client_id, NULL, 0, 0, claims_out);
     if (rc == NGX_DECLINED) {
         p->jwks.len = 0;
         if (ngx_http_oidc_fetch_jwks(p, r->connection->log) == NGX_OK) {
             rc = ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &id_token,
                                            &p->jwks, &p->issuer, &p->client_id,
-                                           NULL, 0, claims_out);
+                                           NULL, 0, 0, claims_out);
         }
     }
     if (rc != NGX_OK) {
@@ -1412,9 +1412,10 @@ ngx_http_oidc_redirect(ngx_http_request_t *r, ngx_str_t *url)
 static ngx_int_t
 ngx_http_oidc_logout(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
 {
-    ngx_str_t  redirect_uri, redirect_uri_enc, id_token, id_token_enc, url;
+    ngx_str_t  redirect_uri, redirect_uri_enc, client_id_enc, id_token, id_token_enc, url;
     u_char    *q, *dot;
     ngx_flag_t  have_id_token = 0;
+    ngx_str_null(&id_token_enc);
 
     {
         ngx_str_t  cookie;
@@ -1467,12 +1468,16 @@ ngx_http_oidc_logout(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
 
     redirect_uri = p->post_logout_uri;
     redirect_uri_enc.data = ngx_pnalloc(r->pool, redirect_uri.len * 3);
-    if (redirect_uri_enc.data == NULL) {
+    client_id_enc.data = ngx_pnalloc(r->pool, p->client_id.len * 3);
+    if (redirect_uri_enc.data == NULL || client_id_enc.data == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     redirect_uri_enc.len = (u_char *) ngx_escape_uri(redirect_uri_enc.data,
         redirect_uri.data, redirect_uri.len, NGX_ESCAPE_URI_COMPONENT)
         - redirect_uri_enc.data;
+    client_id_enc.len = (u_char *) ngx_escape_uri(client_id_enc.data,
+        p->client_id.data, p->client_id.len, NGX_ESCAPE_URI_COMPONENT)
+        - client_id_enc.data;
 
     if (have_id_token) {
         id_token_enc.data = ngx_pnalloc(r->pool, id_token.len * 3);
@@ -1484,8 +1489,11 @@ ngx_http_oidc_logout(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
             - id_token_enc.data;
     }
 
-    url.len = p->end_session_endpoint.len + sizeof("?post_logout_redirect_uri=")
-              - 1 + redirect_uri_enc.len;
+    /* always send client_id: with no valid session there is no id_token_hint,
+     * and the end_session endpoint still needs client_id + redirect URI */
+    url.len = p->end_session_endpoint.len + sizeof("?client_id=") - 1
+              + client_id_enc.len
+              + sizeof("&post_logout_redirect_uri=") - 1 + redirect_uri_enc.len;
     if (have_id_token) {
         url.len += sizeof("&id_token_hint=") - 1 + id_token_enc.len;
     }
@@ -1495,7 +1503,9 @@ ngx_http_oidc_logout(ngx_http_request_t *r, ngx_http_oidc_provider_t *p)
     }
     q = ngx_cpymem(url.data, p->end_session_endpoint.data,
                    p->end_session_endpoint.len);
-    q = ngx_cpymem(q, "?post_logout_redirect_uri=", 26);
+    q = ngx_cpymem(q, "?client_id=", 11);
+    q = ngx_cpymem(q, client_id_enc.data, client_id_enc.len);
+    q = ngx_cpymem(q, "&post_logout_redirect_uri=", 26);
     q = ngx_cpymem(q, redirect_uri_enc.data, redirect_uri_enc.len);
     if (have_id_token) {
         q = ngx_cpymem(q, "&id_token_hint=", 15);
@@ -2016,7 +2026,7 @@ ngx_http_oidc_backchannel_done(ngx_http_request_t *r)
 
     if (status == NGX_HTTP_OK
         && ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &token, &p->jwks,
-                                    &p->issuer, &p->client_id, NULL, 0,
+                                    &p->issuer, &p->client_id, NULL, 0, 1,
                                     &claims) != NGX_OK)
     {
         status = NGX_HTTP_BAD_REQUEST;

@@ -90,7 +90,7 @@ docker run --rm --user "$(id -u):$(id -g)" --network test_oidc -v "$tmpd:/tmp" \
     --cookie /tmp/oidc-e2e-cookies --connect-to demo.example.com:80:nginx:80 \
     http://demo.example.com/logout >"$cookies"
 grep -q 'Set-Cookie: oidc_session_my_idp=;' "$cookies"
-grep -q 'Location: https://idp.test:8443/logout?post_logout_redirect_uri=' "$cookies"
+grep -q 'Location: https://idp.test:8443/logout?client_id=' "$cookies"
 grep -q '&id_token_hint=' "$cookies"
 $compose logs --no-color idp | grep -q 'POST /revoke HTTP/1.1" 200'
 
