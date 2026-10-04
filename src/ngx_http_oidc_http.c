@@ -6,6 +6,17 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <errno.h>
+#include <sys/time.h>
+
+/*
+ * Blocking network I/O is bounded by timeouts and a response cap, because the
+ * module runs inside nginx workers: a hung or slow IdP must never pin a worker
+ * indefinitely (discovery, JWKS, token, userinfo, refresh and revocation all
+ * run through this client).
+ */
+#define NGX_OIDC_HTTP_TIMEOUT       30000  /* ms, per operation */
+#define NGX_OIDC_HTTP_MAX_RESPONSE  (8 * 1024 * 1024)
 
 typedef struct {
     ngx_str_t  scheme;
@@ -78,13 +89,37 @@ ngx_http_oidc_parse_url(ngx_str_t *url, ngx_http_oidc_url_t *u)
     return NGX_OK;
 }
 
+/* elapsed wall-clock milliseconds; gettimeofday advances during blocking
+ * syscalls, unlike nginx's cached ngx_current_msec */
+static long
+ngx_http_oidc_msec(void)
+{
+    struct timeval  tv;
+
+    gettimeofday(&tv, NULL);
+    return (long) tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+static int
+ngx_http_oidc_wait(int fd, short events, int timeout_ms)
+{
+    struct pollfd  pfd;
+
+    pfd.fd = fd;
+    pfd.events = events;
+    pfd.revents = 0;
+    return poll(&pfd, 1, timeout_ms);
+}
+
 static ngx_int_t
 ngx_http_oidc_connect(ngx_log_t *log, ngx_http_oidc_url_t *u, int *fd)
 {
     struct addrinfo  hints, *res, *rp;
     char             host[256], port[16];
-    int              s = -1, rc;
+    int              s = -1, rc, flags, sockerr = -1;
+    socklen_t        slen;
     u_char          *pp;
+    long             start;
 
     if (u->host.len >= sizeof(host)) {
         return NGX_ERROR;
@@ -106,13 +141,49 @@ ngx_http_oidc_connect(ngx_log_t *log, ngx_http_oidc_url_t *u, int *fd)
                       host, port, gai_strerror(rc));
         return NGX_ERROR;
     }
+
     for (rp = res; rp != NULL; rp = rp->ai_next) {
         s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (s < 0) {
             continue;
         }
-        if (connect(s, rp->ai_addr, rp->ai_addrlen) == 0) {
+
+        flags = fcntl(s, F_GETFL, 0);
+        if (flags != -1) {
+            (void) fcntl(s, F_SETFL, flags | O_NONBLOCK);
+        }
+
+        rc = connect(s, rp->ai_addr, rp->ai_addrlen);
+        if (rc == 0) {
             break;
+        }
+        if (errno == EINPROGRESS) {
+            int  connected = 0;
+
+            start = ngx_http_oidc_msec();
+            for (;;) {
+                rc = ngx_http_oidc_wait(s, POLLOUT, 5000);
+                if (rc > 0) {
+                    slen = sizeof(sockerr);
+                    sockerr = 0;
+                    if (getsockopt(s, SOL_SOCKET, SO_ERROR, &sockerr, &slen)
+                        == 0 && sockerr == 0)
+                    {
+                        connected = 1;
+                    }
+                    break;
+                }
+                if (rc < 0 && errno != EINTR) {
+                    break;                       /* poll-Fehler */
+                }
+                if (ngx_http_oidc_msec() - start > NGX_OIDC_HTTP_TIMEOUT) {
+                    break;                       /* Timeout */
+                }
+            }
+            if (connected) {
+                /* verbunden; bleibt non-blocking fuer den Handshake */
+                break;
+            }
         }
         close(s);
         s = -1;
@@ -136,6 +207,8 @@ ngx_http_oidc_tls(ngx_log_t *log, int fd, ngx_str_t *host,
     SSL_CTX  *ctx = NULL;
     SSL     *ssl = NULL;
     ngx_int_t  rc = NGX_ERROR;
+    int      ret, err, flags;
+    long     start;
 
     ctx = SSL_CTX_new(TLS_client_method());
     if (ctx == NULL) {
@@ -172,18 +245,40 @@ ngx_http_oidc_tls(ngx_log_t *log, int fd, ngx_str_t *host,
         ngx_memcpy(h, host->data, host->len);
         h[host->len] = '\0';
         SSL_set_tlsext_host_name(ssl, h);
-        SSL_set1_host(ssl, h);
+        /* ohne Host-Check waere die Zertifikatspruefung unvollstaendig */
+        if (SSL_set1_host(ssl, h) != 1) {
+            ngx_log_error(NGX_LOG_ERR, log, 0,
+                          "oidc: invalid TLS host name \"%s\"", h);
+            goto done;
+        }
+    } else {
+        ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: TLS host name too long");
+        goto done;
     }
 
     SSL_set_fd(ssl, fd);
 
-    if (SSL_connect(ssl) != 1) {
-        unsigned long  e = ERR_get_error();
-        char  ebuf[256];
-        ERR_error_string_n(e, ebuf, sizeof(ebuf));
-        ngx_log_error(NGX_LOG_ERR, log, 0,
-                      "oidc: TLS handshake failed: %s (verify=%ld)",
-                      ebuf, SSL_get_verify_result(ssl));
+    /* non-blocking handshake, bounded by the operation timeout */
+    start = ngx_http_oidc_msec();
+    for (;;) {
+        ret = SSL_connect(ssl);
+        if (ret == 1) {
+            break;
+        }
+        err = SSL_get_error(ssl, ret);
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+            if (ngx_http_oidc_msec() - start > NGX_OIDC_HTTP_TIMEOUT
+                || ngx_http_oidc_wait(fd,
+                       (err == SSL_ERROR_WANT_READ) ? POLLIN : POLLOUT, 5000)
+                   <= 0)
+            {
+                ngx_log_error(NGX_LOG_ERR, log, 0,
+                              "oidc: TLS handshake timed out");
+                goto done;
+            }
+            continue;
+        }
+        ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: TLS handshake failed");
         goto done;
     }
 
@@ -191,6 +286,12 @@ ngx_http_oidc_tls(ngx_log_t *log, int fd, ngx_str_t *host,
         ngx_log_error(NGX_LOG_ERR, log, 0,
                       "oidc: TLS certificate verification failed");
         goto done;
+    }
+
+    /* back to blocking I/O for SSL_write/SSL_read */
+    flags = fcntl(fd, F_GETFL, 0);
+    if (flags != -1) {
+        (void) fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
     }
 
     *ssl_out = ssl;
@@ -213,23 +314,31 @@ ngx_http_oidc_send_recv(ngx_pool_t *pool, ngx_log_t *log, SSL *ssl, int fd,
     u_char   buf[16384];
     ssize_t  n;
     ngx_int_t rc = NGX_ERROR;
-    struct pollfd pfd;
     int      ret;
-    size_t   total = 0, cap = 0;
+    size_t   total = 0, cap = 0, sent = 0;
     u_char  *body = NULL;
     u_char  *sep;
+    long     start;
 
-    /* send */
-    if (SSL_write(ssl, request->data, request->len) != (int) request->len) {
-        ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: SSL_write failed");
-        goto done;
+    /* send (loop: SSL_write darf partiell schreiben) */
+    while (sent < request->len) {
+        ret = SSL_write(ssl, request->data + sent, request->len - sent);
+        if (ret <= 0) {
+            ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: SSL_write failed");
+            goto done;
+        }
+        sent += (size_t) ret;
     }
 
-    /* receive with timeout, accumulating into a growing buffer */
+    start = ngx_http_oidc_msec();
+
     for (;;) {
-        pfd.fd = fd;
-        pfd.events = POLLIN;
-        ret = poll(&pfd, 1, 10000); /* 10s */
+        if (ngx_http_oidc_msec() - start > NGX_OIDC_HTTP_TIMEOUT) {
+            ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: recv timeout");
+            goto done;
+        }
+
+        ret = ngx_http_oidc_wait(fd, POLLIN, 10000);
         if (ret <= 0) {
             ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: recv timeout");
             goto done;
@@ -238,6 +347,13 @@ ngx_http_oidc_send_recv(ngx_pool_t *pool, ngx_log_t *log, SSL *ssl, int fd,
         n = SSL_read(ssl, buf, sizeof(buf));
         if (n <= 0) {
             break;
+        }
+
+        if (total + (size_t) n > NGX_OIDC_HTTP_MAX_RESPONSE) {
+            ngx_log_error(NGX_LOG_ERR, log, 0,
+                          "oidc: response exceeds %d bytes",
+                          (int) NGX_OIDC_HTTP_MAX_RESPONSE);
+            goto done;
         }
 
         if (total + (size_t) n > cap) {
