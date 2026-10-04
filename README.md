@@ -193,7 +193,8 @@ state cookie becomes `oidc_session_company_state`. Without `session_cookie`, def
 
 ## Test
 
-Requires Docker and Docker Compose.
+Requires Docker and Docker Compose. Test certificates are generated on
+demand and renewed automatically once they are expired.
 
 ```sh
 ./test/e2e.sh
@@ -236,3 +237,7 @@ On Apple Silicon, Keycloak runs as `linux/amd64` because current native image cr
 - `post_logout_uri` and public `backchannel_logout_uri` must be registered at IdP. Backchannel endpoint must be reachable by IdP over HTTPS.
 - SQLite is single-host storage. Do not use it across load-balanced nginx nodes or NFS.
 - Delete the SQLite file when upgrading across module versions that change the session schema; old rows are not migrated.
+
+## License
+
+BSD 2-Clause. See `LICENSE`.
