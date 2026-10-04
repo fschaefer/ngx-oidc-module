@@ -48,8 +48,9 @@ ngx_http_oidc_hmac_sha256(ngx_pool_t *pool, ngx_str_t *key, ngx_str_t *data,
  * On success, extracts "sub" and the full payload (claims) JSON.
  */
 ngx_int_t
-ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_str_t *jwt, ngx_str_t *jwks,
-    ngx_str_t *issuer, ngx_str_t *client_id, ngx_str_t *nonce, time_t max_age,
+ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_pool_t *pool, ngx_str_t *jwt,
+    ngx_str_t *jwks, ngx_str_t *issuer, ngx_str_t *client_id, ngx_str_t *nonce,
+    time_t max_age,
     ngx_str_t *claims_out)
 {
     u_char  *dot1, *dot2;
@@ -83,22 +84,22 @@ ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_str_t *jwt, ngx_str_t *jwks,
     sig_b64.data = dot2 + 1;
     sig_b64.len = jwt->data + jwt->len - dot2 - 1;
 
-    if (ngx_http_oidc_b64url_decode(ngx_cycle->pool, &header_b64, &header)
+    if (ngx_http_oidc_b64url_decode(pool, &header_b64, &header)
         != NGX_OK)
     {
         return NGX_ERROR;
     }
-    if (ngx_http_oidc_b64url_decode(ngx_cycle->pool, &payload_b64, &payload)
+    if (ngx_http_oidc_b64url_decode(pool, &payload_b64, &payload)
         != NGX_OK)
     {
         return NGX_ERROR;
     }
-    if (ngx_http_oidc_b64url_decode(ngx_cycle->pool, &sig_b64, &sig) != NGX_OK) {
+    if (ngx_http_oidc_b64url_decode(pool, &sig_b64, &sig) != NGX_OK) {
         return NGX_ERROR;
     }
 
     /* header: alg + kid */
-    if (ngx_http_oidc_json_get_string(&header, &(ngx_str_t) ngx_string("alg"),
+    if (ngx_http_oidc_json_get_string(pool, &header, &(ngx_str_t) ngx_string("alg"),
                                       &alg) != NGX_OK)
     {
         ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: JWT header missing alg");
@@ -109,7 +110,7 @@ ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_str_t *jwt, ngx_str_t *jwks,
         return NGX_ERROR;
     }
 
-    rc = ngx_http_oidc_json_get_string(&header,
+    rc = ngx_http_oidc_json_get_string(pool, &header,
                                        &(ngx_str_t) ngx_string("kid"), &kid);
     if (rc != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: JWT header missing kid");
@@ -138,14 +139,14 @@ ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_str_t *jwt, ngx_str_t *jwks,
                 obj.data = jp;
                 obj.len = close - jp + 1;
 
-                if (ngx_http_oidc_json_get_string(&obj,
+                if (ngx_http_oidc_json_get_string(pool, &obj,
                         &(ngx_str_t) ngx_string("kid"), &jkid) == NGX_OK
                     && jkid.len == kid.len
                     && ngx_strncmp(jkid.data, kid.data, kid.len) == 0)
                 {
-                    if (ngx_http_oidc_json_get_string(&obj,
+                    if (ngx_http_oidc_json_get_string(pool, &obj,
                             &(ngx_str_t) ngx_string("n"), &jn) == NGX_OK
-                        && ngx_http_oidc_json_get_string(&obj,
+                        && ngx_http_oidc_json_get_string(pool, &obj,
                             &(ngx_str_t) ngx_string("e"), &je) == NGX_OK)
                     {
                         n = jn;
@@ -174,8 +175,8 @@ ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_str_t *jwt, ngx_str_t *jwks,
         EVP_MD_CTX *ctx = NULL;
         ngx_int_t  ok = NGX_ERROR;
 
-        if (ngx_http_oidc_b64url_decode(ngx_cycle->pool, &n, &n_bin) != NGX_OK
-            || ngx_http_oidc_b64url_decode(ngx_cycle->pool, &e, &e_bin)
+        if (ngx_http_oidc_b64url_decode(pool, &n, &n_bin) != NGX_OK
+            || ngx_http_oidc_b64url_decode(pool, &e, &e_bin)
                != NGX_OK)
         {
             goto done;
@@ -247,7 +248,7 @@ done:
     }
 
     /* validate claims: exp, iss, aud, nonce */
-    if (ngx_http_oidc_json_get_string(&payload,
+    if (ngx_http_oidc_json_get_string(pool, &payload,
             &(ngx_str_t) ngx_string("exp"), &exp_s) != NGX_OK)
     {
         ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: JWT missing exp");
@@ -260,7 +261,7 @@ done:
         return NGX_ERROR;
     }
 
-    if (ngx_http_oidc_json_get_string(&payload,
+    if (ngx_http_oidc_json_get_string(pool, &payload,
             &(ngx_str_t) ngx_string("iss"), &iss_s) != NGX_OK
         || iss_s.len != issuer->len
         || ngx_strncmp(iss_s.data, issuer->data, issuer->len) != 0)
@@ -271,7 +272,7 @@ done:
 
     aud_is_array = ngx_http_oidc_json_array_contains(&payload,
         &(ngx_str_t) ngx_string("aud"), client_id) == NGX_OK;
-    if (!aud_is_array && (ngx_http_oidc_json_get_string(&payload,
+    if (!aud_is_array && (ngx_http_oidc_json_get_string(pool, &payload,
             &(ngx_str_t) ngx_string("aud"), &aud_s) != NGX_OK
         || aud_s.len != client_id->len
         || ngx_strncmp(aud_s.data, client_id->data, client_id->len) != 0))
@@ -279,7 +280,7 @@ done:
         ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: JWT audience mismatch");
         return NGX_ERROR;
     }
-    if (aud_is_array && (ngx_http_oidc_json_get_string(&payload,
+    if (aud_is_array && (ngx_http_oidc_json_get_string(pool, &payload,
             &(ngx_str_t) ngx_string("azp"), &azp_s) != NGX_OK
         || azp_s.len != client_id->len
         || ngx_strncmp(azp_s.data, client_id->data, client_id->len) != 0))
@@ -289,7 +290,7 @@ done:
     }
 
     if (max_age > 0) {
-        if (ngx_http_oidc_json_get_string(&payload,
+        if (ngx_http_oidc_json_get_string(pool, &payload,
                 &(ngx_str_t) ngx_string("auth_time"), &auth_time_s) != NGX_OK
             || now - ngx_atotm(auth_time_s.data, auth_time_s.len) > max_age)
         {
@@ -299,7 +300,7 @@ done:
     }
 
     if (nonce != NULL && nonce->len > 0) {
-        if (ngx_http_oidc_json_get_string(&payload,
+        if (ngx_http_oidc_json_get_string(pool, &payload,
                 &(ngx_str_t) ngx_string("nonce"), &nonce_s) != NGX_OK
             || nonce_s.len != nonce->len
             || ngx_strncmp(nonce_s.data, nonce->data, nonce->len) != 0)
@@ -311,7 +312,7 @@ done:
 
     /* copy claims into request pool */
     slen = payload.len;
-    sp = ngx_pnalloc(ngx_cycle->pool, slen + 1);
+    sp = ngx_pnalloc(pool, slen + 1);
     if (sp == NULL) {
         return NGX_ERROR;
     }

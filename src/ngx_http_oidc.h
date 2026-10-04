@@ -79,20 +79,21 @@ typedef struct {
     ngx_int_t   status;
 } ngx_http_oidc_http_resp_t;
 
-ngx_int_t ngx_http_oidc_http_get(ngx_log_t *log, ngx_str_t *url,
-    ngx_str_t *trusted_ca, ngx_str_t *auth_header, ngx_http_oidc_http_resp_t *resp);
-ngx_int_t ngx_http_oidc_http_post_form(ngx_log_t *log, ngx_str_t *url,
-    ngx_str_t *trusted_ca, ngx_str_t *auth_header, ngx_str_t *body,
+ngx_int_t ngx_http_oidc_http_get(ngx_pool_t *pool, ngx_log_t *log,
+    ngx_str_t *url, ngx_str_t *trusted_ca, ngx_str_t *auth_header,
     ngx_http_oidc_http_resp_t *resp);
+ngx_int_t ngx_http_oidc_http_post_form(ngx_pool_t *pool, ngx_log_t *log,
+    ngx_str_t *url, ngx_str_t *trusted_ca, ngx_str_t *auth_header,
+    ngx_str_t *body, ngx_http_oidc_http_resp_t *resp);
 
 /* jwt.c */
-ngx_int_t ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_str_t *jwt,
-    ngx_str_t *jwks, ngx_str_t *issuer, ngx_str_t *client_id,
+ngx_int_t ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_pool_t *pool,
+    ngx_str_t *jwt, ngx_str_t *jwks, ngx_str_t *issuer, ngx_str_t *client_id,
     ngx_str_t *nonce, time_t max_age, ngx_str_t *claims_out);
 
 /* json.c */
-ngx_int_t ngx_http_oidc_json_get_string(ngx_str_t *json, ngx_str_t *key,
-    ngx_str_t *out);
+ngx_int_t ngx_http_oidc_json_get_string(ngx_pool_t *pool, ngx_str_t *json,
+    ngx_str_t *key, ngx_str_t *out);
 ngx_int_t ngx_http_oidc_json_array_contains(ngx_str_t *json, ngx_str_t *key,
     ngx_str_t *needle);
 ngx_int_t ngx_http_oidc_json_has_key(ngx_str_t *json, ngx_str_t *key);

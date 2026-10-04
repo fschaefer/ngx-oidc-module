@@ -846,12 +846,12 @@ ngx_http_oidc_callback_handler(ngx_http_request_t *r)
         }
     }
 
-    rc = ngx_http_oidc_jwt_verify(r->connection->log, &id_token, &p->jwks,
+    rc = ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &id_token, &p->jwks,
                                   &p->issuer, &p->client_id, &nonce, max_age, &claims);
     if (rc == NGX_DECLINED) {
         p->jwks.len = 0;
         if (ngx_http_oidc_fetch_jwks(p, r->connection->log) == NGX_OK) {
-            rc = ngx_http_oidc_jwt_verify(r->connection->log, &id_token,
+            rc = ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &id_token,
                                            &p->jwks, &p->issuer, &p->client_id,
                                            &nonce, max_age, &claims);
         }
@@ -902,7 +902,7 @@ ngx_http_oidc_discover(ngx_http_oidc_provider_t *p, ngx_log_t *log)
                    sizeof("/.well-known/openid-configuration") - 1);
     }
 
-    if (ngx_http_oidc_http_get(log, &url, &p->ssl_trusted_certificate, NULL,
+    if (ngx_http_oidc_http_get(ngx_cycle->pool, log, &url, &p->ssl_trusted_certificate, NULL,
                                &resp) != NGX_OK)
     {
         ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: http_get failed for %V", &url);
@@ -915,7 +915,7 @@ ngx_http_oidc_discover(ngx_http_oidc_provider_t *p, ngx_log_t *log)
     }
 
     body = resp.body;
-    if (ngx_http_oidc_json_get_string(&body,
+    if (ngx_http_oidc_json_get_string(ngx_cycle->pool, &body,
             &(ngx_str_t) ngx_string("issuer"), &v) != NGX_OK
         || v.len != p->issuer.len
         || ngx_strncmp(v.data, p->issuer.data, v.len) != 0)
@@ -924,32 +924,32 @@ ngx_http_oidc_discover(ngx_http_oidc_provider_t *p, ngx_log_t *log)
         return NGX_ERROR;
     }
 
-    if (ngx_http_oidc_json_get_string(&body,
+    if (ngx_http_oidc_json_get_string(ngx_cycle->pool, &body,
             &(ngx_str_t) ngx_string("authorization_endpoint"), &v) == NGX_OK)
     {
         p->authorization_endpoint = v;
     }
-    if (ngx_http_oidc_json_get_string(&body,
+    if (ngx_http_oidc_json_get_string(ngx_cycle->pool, &body,
             &(ngx_str_t) ngx_string("token_endpoint"), &v) == NGX_OK)
     {
         p->token_endpoint = v;
     }
-    if (ngx_http_oidc_json_get_string(&body,
+    if (ngx_http_oidc_json_get_string(ngx_cycle->pool, &body,
             &(ngx_str_t) ngx_string("jwks_uri"), &v) == NGX_OK)
     {
         p->jwks_uri = v;
     }
-    if (ngx_http_oidc_json_get_string(&body,
+    if (ngx_http_oidc_json_get_string(ngx_cycle->pool, &body,
             &(ngx_str_t) ngx_string("revocation_endpoint"), &v) == NGX_OK)
     {
         p->revocation_endpoint = v;
     }
-    if (ngx_http_oidc_json_get_string(&body,
+    if (ngx_http_oidc_json_get_string(ngx_cycle->pool, &body,
             &(ngx_str_t) ngx_string("end_session_endpoint"), &v) == NGX_OK)
     {
         p->end_session_endpoint = v;
     }
-    if (ngx_http_oidc_json_get_string(&body,
+    if (ngx_http_oidc_json_get_string(ngx_cycle->pool, &body,
             &(ngx_str_t) ngx_string("userinfo_endpoint"), &v) == NGX_OK)
     {
         p->userinfo_endpoint = v;
@@ -981,7 +981,7 @@ ngx_http_oidc_fetch_jwks(ngx_http_oidc_provider_t *p, ngx_log_t *log)
         }
     }
 
-    if (ngx_http_oidc_http_get(log, &p->jwks_uri, &p->ssl_trusted_certificate,
+    if (ngx_http_oidc_http_get(ngx_cycle->pool, log, &p->jwks_uri, &p->ssl_trusted_certificate,
                                NULL, &resp) != NGX_OK)
     {
         return NGX_ERROR;
@@ -1069,7 +1069,7 @@ ngx_http_oidc_exchange_code(ngx_http_request_t *r,
         ngx_memcpy(auth_header.data + 6, auth_b64.data, auth_b64.len);
     }
 
-    if (ngx_http_oidc_http_post_form(r->connection->log, &p->token_endpoint,
+    if (ngx_http_oidc_http_post_form(r->pool, r->connection->log, &p->token_endpoint,
                                      &p->ssl_trusted_certificate, &auth_header,
                                      &body, &resp) != NGX_OK)
     {
@@ -1081,7 +1081,7 @@ ngx_http_oidc_exchange_code(ngx_http_request_t *r,
         return NGX_ERROR;
     }
 
-    if (ngx_http_oidc_json_get_string(&resp.body,
+    if (ngx_http_oidc_json_get_string(r->pool, &resp.body,
             &(ngx_str_t) ngx_string("id_token"), &v) != NGX_OK)
     {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
@@ -1089,7 +1089,7 @@ ngx_http_oidc_exchange_code(ngx_http_request_t *r,
         return NGX_ERROR;
     }
     *id_token_out = v;
-    if (ngx_http_oidc_json_get_string(&resp.body,
+    if (ngx_http_oidc_json_get_string(r->pool, &resp.body,
             &(ngx_str_t) ngx_string("access_token"), &v) != NGX_OK)
     {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
@@ -1099,12 +1099,12 @@ ngx_http_oidc_exchange_code(ngx_http_request_t *r,
     *access_token_out = v;
     ngx_str_null(refresh_token_out);
     *access_expires_out = 0;
-    if (ngx_http_oidc_json_get_string(&resp.body,
+    if (ngx_http_oidc_json_get_string(r->pool, &resp.body,
             &(ngx_str_t) ngx_string("refresh_token"), &v) == NGX_OK)
     {
         *refresh_token_out = v;
     }
-    if (ngx_http_oidc_json_get_string(&resp.body,
+    if (ngx_http_oidc_json_get_string(r->pool, &resp.body,
             &(ngx_str_t) ngx_string("expires_in"), &v) == NGX_OK)
     {
         *access_expires_out = ngx_time() + ngx_atotm(v.data, v.len);
@@ -1140,12 +1140,12 @@ ngx_http_oidc_fetch_userinfo(ngx_http_request_t *r, ngx_http_oidc_provider_t *p,
     q = ngx_cpymem(auth.data, "Bearer ", sizeof("Bearer ") - 1);
     ngx_memcpy(q, access_token->data, access_token->len);
 
-    if (ngx_http_oidc_http_get(r->connection->log, &p->userinfo_endpoint,
+    if (ngx_http_oidc_http_get(r->pool, r->connection->log, &p->userinfo_endpoint,
             &p->ssl_trusted_certificate, &auth, &resp) != NGX_OK
         || resp.status != 200
-        || ngx_http_oidc_json_get_string(id_claims,
+        || ngx_http_oidc_json_get_string(r->pool, id_claims,
                &(ngx_str_t) ngx_string("sub"), &id_sub) != NGX_OK
-        || ngx_http_oidc_json_get_string(&resp.body,
+        || ngx_http_oidc_json_get_string(r->pool, &resp.body,
                &(ngx_str_t) ngx_string("sub"), &userinfo_sub) != NGX_OK
         || id_sub.len != userinfo_sub.len
         || ngx_strncmp(id_sub.data, userinfo_sub.data, id_sub.len) != 0)
@@ -1170,18 +1170,18 @@ ngx_http_oidc_issue_session(ngx_http_request_t *r,
     time_t     exp, max_age;
 
     ngx_str_null(&sid);
-    if (ngx_http_oidc_json_get_string(claims,
+    if (ngx_http_oidc_json_get_string(r->pool, claims,
             &(ngx_str_t) ngx_string("sub"), &sub) != NGX_OK)
     {
         return NGX_ERROR;
     }
-    if (ngx_http_oidc_json_get_string(claims,
+    if (ngx_http_oidc_json_get_string(r->pool, claims,
             &(ngx_str_t) ngx_string("sid"), &sid) != NGX_OK)
     {
         ngx_str_null(&sid);
     }
 
-    if (ngx_http_oidc_json_get_string(claims,
+    if (ngx_http_oidc_json_get_string(r->pool, claims,
             &(ngx_str_t) ngx_string("exp"), &exp_s) != NGX_OK)
     {
         return NGX_ERROR;
@@ -1291,12 +1291,12 @@ ngx_http_oidc_validate_session(ngx_http_request_t *r,
     {
         return NGX_DECLINED;
     }
-    rc = ngx_http_oidc_jwt_verify(r->connection->log, &id_token, &p->jwks,
+    rc = ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &id_token, &p->jwks,
                                   &p->issuer, &p->client_id, NULL, 0, claims_out);
     if (rc == NGX_DECLINED) {
         p->jwks.len = 0;
         if (ngx_http_oidc_fetch_jwks(p, r->connection->log) == NGX_OK) {
-            rc = ngx_http_oidc_jwt_verify(r->connection->log, &id_token,
+            rc = ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &id_token,
                                            &p->jwks, &p->issuer, &p->client_id,
                                            NULL, 0, claims_out);
         }
@@ -1345,7 +1345,7 @@ ngx_http_oidc_variable(ngx_http_request_t *r, ngx_http_variable_value_t *v,
     }
 
     if (claims->len == 0
-        || ngx_http_oidc_json_get_string(claims, &key, &val) != NGX_OK) {
+        || ngx_http_oidc_json_get_string(r->pool, claims, &key, &val) != NGX_OK) {
         v->not_found = 1;
         return NGX_OK;
     }
@@ -1675,7 +1675,7 @@ ngx_http_oidc_revoke_refresh_token(ngx_http_request_t *r,
     ngx_memcpy(auth.data, "Basic ", 6);
     ngx_memcpy(auth.data + 6, cred_b64.data, cred_b64.len);
 
-    if (ngx_http_oidc_http_post_form(r->connection->log,
+    if (ngx_http_oidc_http_post_form(r->pool, r->connection->log,
             &p->revocation_endpoint, &p->ssl_trusted_certificate, &auth,
             &body, &resp) != NGX_OK || (resp.status != 200 && resp.status != 204))
     {
@@ -1787,12 +1787,12 @@ ngx_http_oidc_refresh_session(ngx_http_request_t *r, ngx_http_oidc_provider_t *p
     q = ngx_cpymem(auth.data, "Basic ", sizeof("Basic ") - 1);
     ngx_memcpy(q, credentials_b64.data, credentials_b64.len);
 
-    if (ngx_http_oidc_http_post_form(r->connection->log, &p->token_endpoint,
+    if (ngx_http_oidc_http_post_form(r->pool, r->connection->log, &p->token_endpoint,
             &p->ssl_trusted_certificate, &auth, &body, &resp) != NGX_OK
         || resp.status != 200
-        || ngx_http_oidc_json_get_string(&resp.body,
+        || ngx_http_oidc_json_get_string(r->pool, &resp.body,
                &(ngx_str_t) ngx_string("refresh_token"), &next_refresh) != NGX_OK
-        || ngx_http_oidc_json_get_string(&resp.body,
+        || ngx_http_oidc_json_get_string(r->pool, &resp.body,
                &(ngx_str_t) ngx_string("expires_in"), &expires_s) != NGX_OK
         || ngx_http_oidc_session_encrypt(r->pool, p, &next_refresh,
                                          &encrypted_refresh) != NGX_OK)
@@ -1976,7 +1976,7 @@ ngx_http_oidc_backchannel_done(ngx_http_request_t *r)
     }
 
     if (status == NGX_HTTP_OK
-        && ngx_http_oidc_jwt_verify(r->connection->log, &token, &p->jwks,
+        && ngx_http_oidc_jwt_verify(r->connection->log, r->pool, &token, &p->jwks,
                                     &p->issuer, &p->client_id, NULL, 0,
                                     &claims) != NGX_OK)
     {
@@ -2004,12 +2004,12 @@ ngx_http_oidc_backchannel_done(ngx_http_request_t *r)
     ngx_str_null(&sid);
     ngx_str_null(&sub);
     if (status == NGX_HTTP_OK) {
-        if (ngx_http_oidc_json_get_string(&claims,
+        if (ngx_http_oidc_json_get_string(r->pool, &claims,
                 &(ngx_str_t) ngx_string("sid"), &sid) != NGX_OK)
         {
             ngx_str_null(&sid);
         }
-        if (ngx_http_oidc_json_get_string(&claims,
+        if (ngx_http_oidc_json_get_string(r->pool, &claims,
                 &(ngx_str_t) ngx_string("sub"), &sub) != NGX_OK)
         {
             ngx_str_null(&sub);

@@ -1,5 +1,7 @@
 #include "ngx_http_oidc.h"
 
+#define NGX_OIDC_JSON_KEY_MAX  128
+
 static ngx_int_t
 ngx_http_oidc_json_load(ngx_str_t *json, json_t **root)
 {
@@ -13,10 +15,9 @@ ngx_http_oidc_json_load(ngx_str_t *json, json_t **root)
 static json_t *
 ngx_http_oidc_json_object_get(json_t *object, ngx_str_t *key)
 {
-    u_char  *name;
+    u_char  name[NGX_OIDC_JSON_KEY_MAX];
 
-    name = ngx_pnalloc(ngx_cycle->pool, key->len + 1);
-    if (name == NULL) {
+    if (key->len == 0 || key->len + 1 > sizeof(name)) {
         return NULL;
     }
     ngx_memcpy(name, key->data, key->len);
@@ -25,7 +26,8 @@ ngx_http_oidc_json_object_get(json_t *object, ngx_str_t *key)
 }
 
 ngx_int_t
-ngx_http_oidc_json_get_string(ngx_str_t *json, ngx_str_t *key, ngx_str_t *out)
+ngx_http_oidc_json_get_string(ngx_pool_t *pool, ngx_str_t *json, ngx_str_t *key,
+    ngx_str_t *out)
 {
     json_t  *root, *value;
     const char  *string;
@@ -37,14 +39,14 @@ ngx_http_oidc_json_get_string(ngx_str_t *json, ngx_str_t *key, ngx_str_t *out)
     if (json_is_string(value)) {
         string = json_string_value(value);
         out->len = json_string_length(value);
-        out->data = ngx_pnalloc(ngx_cycle->pool, out->len);
+        out->data = ngx_pnalloc(pool, out->len);
         if (out->data == NULL) {
             json_decref(root);
             return NGX_ERROR;
         }
         ngx_memcpy(out->data, string, out->len);
     } else if (json_is_integer(value)) {
-        out->data = ngx_pnalloc(ngx_cycle->pool, NGX_INT_T_LEN);
+        out->data = ngx_pnalloc(pool, NGX_INT_T_LEN);
         if (out->data == NULL) {
             json_decref(root);
             return NGX_ERROR;

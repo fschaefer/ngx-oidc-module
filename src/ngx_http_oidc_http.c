@@ -20,8 +20,8 @@ static ngx_int_t ngx_http_oidc_connect(ngx_log_t *log,
     ngx_http_oidc_url_t *u, int *fd);
 static ngx_int_t ngx_http_oidc_tls(ngx_log_t *log, int fd, ngx_str_t *host,
     ngx_str_t *trusted_ca, SSL **ssl_out);
-static ngx_int_t ngx_http_oidc_send_recv(ngx_log_t *log, SSL *ssl, int fd,
-    ngx_str_t *request, ngx_http_oidc_http_resp_t *resp);
+static ngx_int_t ngx_http_oidc_send_recv(ngx_pool_t *pool, ngx_log_t *log,
+    SSL *ssl, int fd, ngx_str_t *request, ngx_http_oidc_http_resp_t *resp);
 
 static ngx_int_t
 ngx_http_oidc_parse_url(ngx_str_t *url, ngx_http_oidc_url_t *u)
@@ -204,8 +204,8 @@ done:
 }
 
 static ngx_int_t
-ngx_http_oidc_send_recv(ngx_log_t *log, SSL *ssl, int fd, ngx_str_t *request,
-    ngx_http_oidc_http_resp_t *resp)
+ngx_http_oidc_send_recv(ngx_pool_t *pool, ngx_log_t *log, SSL *ssl, int fd,
+    ngx_str_t *request, ngx_http_oidc_http_resp_t *resp)
 {
     u_char   buf[16384];
     ssize_t  n;
@@ -243,7 +243,7 @@ ngx_http_oidc_send_recv(ngx_log_t *log, SSL *ssl, int fd, ngx_str_t *request,
             while (ncap < total + (size_t) n) {
                 ncap *= 2;
             }
-            nb = ngx_pnalloc(ngx_cycle->pool, ncap);
+            nb = ngx_pnalloc(pool, ncap);
             if (nb == NULL) {
                 goto done;
             }
@@ -299,8 +299,9 @@ done:
 }
 
 ngx_int_t
-ngx_http_oidc_http_get(ngx_log_t *log, ngx_str_t *url, ngx_str_t *trusted_ca,
-    ngx_str_t *auth_header, ngx_http_oidc_http_resp_t *resp)
+ngx_http_oidc_http_get(ngx_pool_t *pool, ngx_log_t *log, ngx_str_t *url,
+    ngx_str_t *trusted_ca, ngx_str_t *auth_header,
+    ngx_http_oidc_http_resp_t *resp)
 {
     ngx_http_oidc_url_t  u;
     int      fd = -1;
@@ -329,7 +330,7 @@ ngx_http_oidc_http_get(ngx_log_t *log, ngx_str_t *url, ngx_str_t *trusted_ca,
     }
 
     len = 64 + u.path.len + (auth_header ? auth_header->len : 0) + 64;
-    req.data = ngx_pnalloc(ngx_cycle->pool, len);
+    req.data = ngx_pnalloc(pool, len);
     if (req.data == NULL) {
         goto done;
     }
@@ -347,7 +348,7 @@ ngx_http_oidc_http_get(ngx_log_t *log, ngx_str_t *url, ngx_str_t *trusted_ca,
     p = ngx_cpymem(p, "Connection: close\r\n\r\n", 21);
     req.len = p - req.data;
 
-    rc = ngx_http_oidc_send_recv(log, ssl, fd, &req, resp);
+    rc = ngx_http_oidc_send_recv(pool, log, ssl, fd, &req, resp);
 
 done:
     if (ssl) {
@@ -360,7 +361,7 @@ done:
 }
 
 ngx_int_t
-ngx_http_oidc_http_post_form(ngx_log_t *log, ngx_str_t *url,
+ngx_http_oidc_http_post_form(ngx_pool_t *pool, ngx_log_t *log, ngx_str_t *url,
     ngx_str_t *trusted_ca, ngx_str_t *auth_header, ngx_str_t *body,
     ngx_http_oidc_http_resp_t *resp)
 {
@@ -387,7 +388,7 @@ ngx_http_oidc_http_post_form(ngx_log_t *log, ngx_str_t *url,
     }
 
     len = 128 + u.path.len + (auth_header ? auth_header->len : 0) + body->len;
-    req.data = ngx_pnalloc(ngx_cycle->pool, len);
+    req.data = ngx_pnalloc(pool, len);
     if (req.data == NULL) {
         goto done;
     }
@@ -408,7 +409,7 @@ ngx_http_oidc_http_post_form(ngx_log_t *log, ngx_str_t *url,
     p = ngx_cpymem(p, body->data, body->len);
     req.len = p - req.data;
 
-    rc = ngx_http_oidc_send_recv(log, ssl, fd, &req, resp);
+    rc = ngx_http_oidc_send_recv(pool, log, ssl, fd, &req, resp);
 
 done:
     if (ssl) {
