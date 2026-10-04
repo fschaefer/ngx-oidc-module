@@ -1,0 +1,19 @@
+[Unit]
+Description=nginx with the OIDC module in front of the application
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/nginx-oidc
+# Rebuilds the module image on every start so a code update is picked up.
+ExecStartPre=/usr/bin/docker build -q -t ngx-oidc-service /opt/ngx-oidc-module
+ExecStart=/usr/bin/docker compose -f /opt/nginx-oidc/compose.yml up -d
+ExecStop=/usr/bin/docker compose -f /opt/nginx-oidc/compose.yml down
+TimeoutStartSec=900
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,66 @@
+# Betriebsbeispiel: nginx mit dem OIDC-Modul als Container-Dienst vor einer
+# Anwendung. Geheimnisse kommen aus .env (0600) - siehe README.md.
+services:
+  app:
+    # Durch die eigene Anwendung ersetzen. Grafana dient hier als Beispiel,
+    # weil sie die vom Modul gesetzten Kopfzeilen per auth.proxy auswertet.
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    environment:
+      GF_SERVER_ROOT_URL: ${PUBLIC_URL:?set in .env}/
+      GF_SERVER_DOMAIN: ${PUBLIC_HOST:?set in .env}
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-WEBAUTH-USER
+      GF_AUTH_PROXY_HEADER_PROPERTY: username
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_WHITELIST: 172.28.0.0/16
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${APP_ADMIN_PASSWORD:?set in .env}
+    volumes:
+      - app-data:/var/lib/grafana
+    networks: [front]
+
+  nginx:
+    image: ngx-oidc-service:latest
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "${PUBLIC_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf.in:/etc/oidc/nginx.conf.in:ro
+      - ./certs:/certs:ro
+      - oidc-sessions:/var/lib/nginx/oidc
+    environment:
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set in .env}
+      OIDC_SESSION_KEY: ${OIDC_SESSION_KEY:?set in .env}
+      OIDC_ISSUER: ${OIDC_ISSUER:?set in .env}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-nginx-app}
+      OIDC_PUBLIC_URL: ${PUBLIC_URL:?set in .env}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-/_oidc_callback}
+      OIDC_LOGOUT_URI: ${OIDC_LOGOUT_URI:-/logout}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        install -d -o nobody -g nogroup -m 0750 /var/lib/nginx/oidc &&
+        sed -e "s|@CLIENT_SECRET@|$$OIDC_CLIENT_SECRET|"
+        -e "s|@SESSION_KEY@|$$OIDC_SESSION_KEY|"
+        -e "s|@ISSUER@|$$OIDC_ISSUER|"
+        -e "s|@CLIENT_ID@|$$OIDC_CLIENT_ID|"
+        -e "s|@PUBLIC_URL@|$$OIDC_PUBLIC_URL|"
+        -e "s|@REDIRECT_URI@|$$OIDC_REDIRECT_URI|"
+        -e "s|@LOGOUT_URI@|$$OIDC_LOGOUT_URI|"
+        /etc/oidc/nginx.conf.in > /tmp/nginx.conf &&
+        exec /usr/local/nginx/sbin/nginx -c /tmp/nginx.conf -g 'daemon off;'
+    networks: [front]
+
+networks:
+  front:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  app-data:
+  oidc-sessions:

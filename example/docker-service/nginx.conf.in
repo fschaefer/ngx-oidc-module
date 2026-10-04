@@ -1,0 +1,46 @@
+load_module modules/ngx_http_oidc_module.so;
+
+worker_processes 2;
+error_log /dev/stderr info;
+events { worker_connections 1024; }
+
+http {
+    resolver 127.0.0.11 ipv4=on valid=300s;
+    client_max_body_size 32m;
+
+    oidc_provider app {
+        issuer @ISSUER@;
+        client_id @CLIENT_ID@;
+        client_secret @CLIENT_SECRET@;
+        session_encryption_key @SESSION_KEY@;
+        # Verzeichnis muss dem nginx-Worker gehoeren, siehe compose.yml
+        session_store sqlite:/var/lib/nginx/oidc/sessions.db;
+        ssl_trusted_certificate /certs/ca.crt;
+        scopes "openid profile email";
+        userinfo on;
+        session_max_age 8h;
+        session_cookie oidc_session_app;
+        redirect_uri @REDIRECT_URI@;
+        logout_uri @LOGOUT_URI@;
+        post_logout_uri @PUBLIC_URL@/;
+    }
+
+    server {
+        listen 443 ssl;
+        ssl_certificate /certs/tls.crt;
+        ssl_certificate_key /certs/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+
+        location / {
+            auth_oidc app;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            # Kopfzeilen, die die Anwendung auswertet (hier Grafana auth.proxy)
+            proxy_set_header X-WEBAUTH-USER $oidc_claim_preferred_username;
+            proxy_set_header X-WEBAUTH-NAME $oidc_claim_name;
+            proxy_set_header X-WEBAUTH-EMAIL $oidc_claim_email;
+            proxy_pass http://app:3000;
+        }
+    }
+}
