@@ -12,6 +12,21 @@ ngx_http_oidc_json_load(ngx_str_t *json, json_t **root)
     return *root ? NGX_OK : NGX_DECLINED;
 }
 
+/* Strip control characters (CR, LF, NUL, ...) in place. Claim values end up
+ * in proxied headers; a newline in a claim must never break header framing. */
+static size_t
+ngx_http_oidc_json_sanitize(u_char *p, size_t len)
+{
+    size_t  i, j;
+
+    for (i = 0, j = 0; i < len; i++) {
+        if (p[i] >= 0x20 && p[i] != 0x7F) {
+            p[j++] = p[i];
+        }
+    }
+    return j;
+}
+
 static json_t *
 ngx_http_oidc_json_object_get(json_t *object, ngx_str_t *key)
 {
@@ -45,6 +60,7 @@ ngx_http_oidc_json_get_string(ngx_pool_t *pool, ngx_str_t *json, ngx_str_t *key,
             return NGX_ERROR;
         }
         ngx_memcpy(out->data, string, out->len);
+        out->len = ngx_http_oidc_json_sanitize(out->data, out->len);
     } else if (json_is_integer(value)) {
         out->data = ngx_pnalloc(pool, NGX_INT_T_LEN);
         if (out->data == NULL) {

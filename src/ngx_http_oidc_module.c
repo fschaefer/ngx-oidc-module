@@ -334,6 +334,12 @@ ngx_http_oidc_provider(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
                            &p->name);
         return NGX_CONF_ERROR;
     }
+    if (p->session_encryption_key.len == 0) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "oidc_provider \"%V\": session_encryption_key is required",
+                           &p->name);
+        return NGX_CONF_ERROR;
+    }
     if (p->redirect_uri.len == 0 || p->redirect_uri.data[0] != '/'
         || (p->redirect_uri.len > 1 && p->redirect_uri.data[1] == '/'))
     {
@@ -960,6 +966,29 @@ ngx_http_oidc_discover(ngx_http_oidc_provider_t *p, ngx_log_t *log)
     {
         ngx_log_error(NGX_LOG_ERR, log, 0,
                       "oidc: discovery document incomplete");
+        return NGX_ERROR;
+    }
+
+    /* every endpoint must stay on the issuer's host (https): the token and
+     * revocation endpoints carry the client secret, the rest carry tokens */
+    if (ngx_http_oidc_endpoint_matches_issuer(&p->issuer,
+            &p->authorization_endpoint) != NGX_OK
+        || ngx_http_oidc_endpoint_matches_issuer(&p->issuer,
+            &p->token_endpoint) != NGX_OK
+        || ngx_http_oidc_endpoint_matches_issuer(&p->issuer,
+            &p->jwks_uri) != NGX_OK
+        || (p->revocation_endpoint.len > 0
+            && ngx_http_oidc_endpoint_matches_issuer(&p->issuer,
+                &p->revocation_endpoint) != NGX_OK)
+        || (p->end_session_endpoint.len > 0
+            && ngx_http_oidc_endpoint_matches_issuer(&p->issuer,
+                &p->end_session_endpoint) != NGX_OK)
+        || (p->userinfo_endpoint.len > 0
+            && ngx_http_oidc_endpoint_matches_issuer(&p->issuer,
+                &p->userinfo_endpoint) != NGX_OK))
+    {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "oidc: discovery endpoint outside issuer host");
         return NGX_ERROR;
     }
 
@@ -2096,10 +2125,7 @@ ngx_http_oidc_session_encrypt(ngx_pool_t *pool, ngx_http_oidc_provider_t *p,
     ngx_str_t  raw;
     int  len, total;
 
-    if (EVP_Digest(p->session_encryption_key.len
-                   ? p->session_encryption_key.data : p->client_secret.data,
-                   p->session_encryption_key.len
-                   ? p->session_encryption_key.len : p->client_secret.len,
+    if (EVP_Digest(p->session_encryption_key.data, p->session_encryption_key.len,
                    key, &key_len, EVP_sha256(), NULL) != 1 || key_len != 32
         || RAND_bytes(nonce, sizeof(nonce)) != 1)
     {
@@ -2151,10 +2177,7 @@ ngx_http_oidc_session_decrypt(ngx_pool_t *pool, ngx_http_oidc_provider_t *p,
 
     if (ngx_http_oidc_b64url_decode(pool, in, &raw) != NGX_OK
         || raw.len < 12 + 16
-        || EVP_Digest(p->session_encryption_key.len
-                      ? p->session_encryption_key.data : p->client_secret.data,
-                      p->session_encryption_key.len
-                      ? p->session_encryption_key.len : p->client_secret.len,
+        || EVP_Digest(p->session_encryption_key.data, p->session_encryption_key.len,
                       key, &key_len, EVP_sha256(), NULL) != 1 || key_len != 32)
     {
         return NGX_ERROR;

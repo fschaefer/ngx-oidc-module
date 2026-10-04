@@ -25,6 +25,10 @@ Not implemented:
 - Clustered/multi-host session storage
 - Frontchannel logout
 
+Every endpoint advertised by the discovery document must live on the issuer's
+host (https). Cross-origin token/JWKS/UserInfo endpoints are rejected at
+discovery time.
+
 ## Build
 
 Build nginx 1.31.3 and dynamic module:
@@ -111,7 +115,7 @@ Provider block in `http` context.
 | `issuer <url>` | Yes | Expected issuer URL. Discovery document and ID token must match exactly. |
 | `client_id <id>` | Yes | OIDC client ID. |
 | `client_secret <secret>` | Yes | Confidential-client credential for token endpoint. |
-| `session_encryption_key <secret>` | No | AES-GCM cookie key material. Defaults to `client_secret`; configure separately in production. |
+| `session_encryption_key <secret>` | Yes | AES-GCM cookie key material. Required; there is no fallback to `client_secret`. |
 | `session_store sqlite:<path>` | No | SQLite persistent session store. Browser receives opaque session ID. |
 | `ssl_trusted_certificate <path>` | No | CA bundle for IdP TLS verification. |
 | `config_url <url>` | No | Discovery endpoint override. |

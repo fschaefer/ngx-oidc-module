@@ -85,6 +85,8 @@ ngx_int_t ngx_http_oidc_http_get(ngx_pool_t *pool, ngx_log_t *log,
 ngx_int_t ngx_http_oidc_http_post_form(ngx_pool_t *pool, ngx_log_t *log,
     ngx_str_t *url, ngx_str_t *trusted_ca, ngx_str_t *auth_header,
     ngx_str_t *body, ngx_http_oidc_http_resp_t *resp);
+ngx_int_t ngx_http_oidc_endpoint_matches_issuer(ngx_str_t *issuer,
+    ngx_str_t *endpoint);
 
 /* jwt.c */
 ngx_int_t ngx_http_oidc_jwt_verify(ngx_log_t *log, ngx_pool_t *pool,

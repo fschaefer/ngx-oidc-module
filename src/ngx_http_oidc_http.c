@@ -42,20 +42,14 @@ ngx_http_oidc_parse_url(ngx_str_t *url, ngx_http_oidc_url_t *u)
 
     ngx_memzero(u, sizeof(*u));
 
+    /* https only: credentials (client_secret, bearer tokens) must never go
+     * out over plaintext */
     if (url->len >= 8 && ngx_strncasecmp(url->data, (u_char *) "https://", 8) == 0) {
         u->scheme.data = (u_char *) "https";
         u->scheme.len = 5;
         u->port = 443;
         u->default_port = 443;
         host_start = url->data + 8;
-    } else if (url->len >= 7
-               && ngx_strncasecmp(url->data, (u_char *) "http://", 7) == 0)
-    {
-        u->scheme.data = (u_char *) "http";
-        u->scheme.len = 4;
-        u->port = 80;
-        u->default_port = 80;
-        host_start = url->data + 7;
     } else {
         return NGX_ERROR;
     }
@@ -86,6 +80,22 @@ ngx_http_oidc_parse_url(ngx_str_t *url, ngx_http_oidc_url_t *u)
         u->path.len = 1;
     }
 
+    return NGX_OK;
+}
+
+ngx_int_t
+ngx_http_oidc_endpoint_matches_issuer(ngx_str_t *issuer, ngx_str_t *endpoint)
+{
+    ngx_http_oidc_url_t  iss, ep;
+
+    if (ngx_http_oidc_parse_url(issuer, &iss) != NGX_OK
+        || ngx_http_oidc_parse_url(endpoint, &ep) != NGX_OK
+        || iss.host.len != ep.host.len
+        || ngx_strncasecmp(iss.host.data, ep.host.data, iss.host.len) != 0
+        || iss.port != ep.port)
+    {
+        return NGX_ERROR;
+    }
     return NGX_OK;
 }
 
@@ -439,11 +449,6 @@ ngx_http_oidc_http_get(ngx_pool_t *pool, ngx_log_t *log, ngx_str_t *url,
         return NGX_ERROR;
     }
 
-    if (u.scheme.len != 5) { /* https only */
-        ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: only https URLs supported");
-        goto done;
-    }
-
     if (ngx_http_oidc_tls(log, fd, &u.host, trusted_ca, &ssl) != NGX_OK) {
         goto done;
     }
@@ -501,10 +506,6 @@ ngx_http_oidc_http_post_form(ngx_pool_t *pool, ngx_log_t *log, ngx_str_t *url,
     }
     if (ngx_http_oidc_connect(log, &u, &fd) != NGX_OK) {
         return NGX_ERROR;
-    }
-    if (u.scheme.len != 5) {
-        ngx_log_error(NGX_LOG_ERR, log, 0, "oidc: only https URLs supported");
-        goto done;
     }
     if (ngx_http_oidc_tls(log, fd, &u.host, trusted_ca, &ssl) != NGX_OK) {
         goto done;
