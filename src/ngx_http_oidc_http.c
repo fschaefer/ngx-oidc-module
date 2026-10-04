@@ -11,6 +11,7 @@ typedef struct {
     ngx_str_t  scheme;
     ngx_str_t  host;
     ngx_uint_t port;
+    ngx_uint_t default_port;
     ngx_str_t  path;   /* includes query */
 } ngx_http_oidc_url_t;
 
@@ -34,6 +35,7 @@ ngx_http_oidc_parse_url(ngx_str_t *url, ngx_http_oidc_url_t *u)
         u->scheme.data = (u_char *) "https";
         u->scheme.len = 5;
         u->port = 443;
+        u->default_port = 443;
         host_start = url->data + 8;
     } else if (url->len >= 7
                && ngx_strncasecmp(url->data, (u_char *) "http://", 7) == 0)
@@ -41,6 +43,7 @@ ngx_http_oidc_parse_url(ngx_str_t *url, ngx_http_oidc_url_t *u)
         u->scheme.data = (u_char *) "http";
         u->scheme.len = 4;
         u->port = 80;
+        u->default_port = 80;
         host_start = url->data + 7;
     } else {
         return NGX_ERROR;
@@ -329,7 +332,8 @@ ngx_http_oidc_http_get(ngx_pool_t *pool, ngx_log_t *log, ngx_str_t *url,
         goto done;
     }
 
-    len = 64 + u.path.len + (auth_header ? auth_header->len : 0) + 64;
+    len = 96 + u.host.len + 8 + u.path.len
+          + (auth_header ? auth_header->len : 0);
     req.data = ngx_pnalloc(pool, len);
     if (req.data == NULL) {
         goto done;
@@ -339,6 +343,9 @@ ngx_http_oidc_http_get(ngx_pool_t *pool, ngx_log_t *log, ngx_str_t *url,
     p = ngx_cpymem(p, u.path.data, u.path.len);
     p = ngx_cpymem(p, " HTTP/1.1\r\nHost: ", 17);
     p = ngx_cpymem(p, u.host.data, u.host.len);
+    if (u.port != u.default_port) {
+        p = ngx_sprintf(p, ":%ui", u.port);
+    }
     p = ngx_cpymem(p, "\r\nAccept: application/json\r\n", 28);
     if (auth_header) {
         p = ngx_cpymem(p, "Authorization: ", 15);
@@ -387,7 +394,8 @@ ngx_http_oidc_http_post_form(ngx_pool_t *pool, ngx_log_t *log, ngx_str_t *url,
         goto done;
     }
 
-    len = 128 + u.path.len + (auth_header ? auth_header->len : 0) + body->len;
+    len = 128 + u.host.len + 8 + u.path.len
+          + (auth_header ? auth_header->len : 0) + body->len;
     req.data = ngx_pnalloc(pool, len);
     if (req.data == NULL) {
         goto done;
@@ -397,6 +405,9 @@ ngx_http_oidc_http_post_form(ngx_pool_t *pool, ngx_log_t *log, ngx_str_t *url,
     p = ngx_cpymem(p, u.path.data, u.path.len);
     p = ngx_cpymem(p, " HTTP/1.1\r\nHost: ", 17);
     p = ngx_cpymem(p, u.host.data, u.host.len);
+    if (u.port != u.default_port) {
+        p = ngx_sprintf(p, ":%ui", u.port);
+    }
     p = ngx_cpymem(p, "\r\nContent-Type: application/x-www-form-urlencoded\r\n",
                    sizeof("\r\nContent-Type: application/x-www-form-urlencoded\r\n") - 1);
     p = ngx_sprintf(p, "Content-Length: %uz\r\n", body->len);
