@@ -1760,10 +1760,7 @@ ngx_http_oidc_refresh_session(ngx_http_request_t *r, ngx_http_oidc_provider_t *p
         return NGX_ERROR;
     }
 
-    if (ngx_http_oidc_session_db_open(p, r->connection->log) != NGX_OK
-        || sqlite3_exec(p->session_db, "BEGIN IMMEDIATE", NULL, NULL, NULL)
-           != SQLITE_OK)
-    {
+    if (ngx_http_oidc_session_db_open(p, r->connection->log) != NGX_OK) {
         return NGX_ERROR;
     }
 
@@ -1777,7 +1774,7 @@ ngx_http_oidc_refresh_session(ngx_http_request_t *r, ngx_http_oidc_provider_t *p
     if (body.data == NULL || credentials.data == NULL
         || credentials_b64.data == NULL)
     {
-        goto fail;
+        return NGX_ERROR;
     }
     q = ngx_cpymem(body.data, "grant_type=refresh_token&refresh_token=",
                    sizeof("grant_type=refresh_token&refresh_token=") - 1);
@@ -1791,7 +1788,7 @@ ngx_http_oidc_refresh_session(ngx_http_request_t *r, ngx_http_oidc_provider_t *p
     auth.len = sizeof("Basic ") - 1 + credentials_b64.len;
     auth.data = ngx_pnalloc(r->pool, auth.len);
     if (auth.data == NULL) {
-        goto fail;
+        return NGX_ERROR;
     }
     q = ngx_cpymem(auth.data, "Basic ", sizeof("Basic ") - 1);
     ngx_memcpy(q, credentials_b64.data, credentials_b64.len);
@@ -1806,11 +1803,16 @@ ngx_http_oidc_refresh_session(ngx_http_request_t *r, ngx_http_oidc_provider_t *p
         || ngx_http_oidc_session_encrypt(r->pool, p, &next_refresh,
                                          &encrypted_refresh) != NGX_OK)
     {
-        goto fail;
+        return NGX_ERROR;
     }
 
     expires = ngx_time() + ngx_atotm(expires_s.data, expires_s.len);
-    if (sqlite3_prepare_v2(p->session_db,
+
+    /* Transaktion erst jetzt: ein langsamer IdP darf keinen SQLite-Write-Lock
+     * halten, sonst laufen andere Worker in das busy_timeout. */
+    if (sqlite3_exec(p->session_db, "BEGIN IMMEDIATE", NULL, NULL, NULL)
+        != SQLITE_OK
+        || sqlite3_prepare_v2(p->session_db,
             "UPDATE oidc_sessions SET refresh_token = ?, access_expires_at = ? "
             "WHERE id = ?", -1, &stmt, NULL) != SQLITE_OK
         || sqlite3_bind_blob(stmt, 1, encrypted_refresh.data,
@@ -1820,16 +1822,15 @@ ngx_http_oidc_refresh_session(ngx_http_request_t *r, ngx_http_oidc_provider_t *p
                              SQLITE_TRANSIENT) != SQLITE_OK
         || sqlite3_step(stmt) != SQLITE_DONE)
     {
-        goto fail;
+        if (stmt) sqlite3_finalize(stmt);
+        sqlite3_exec(p->session_db, "ROLLBACK", NULL, NULL, NULL);
+        return NGX_ERROR;
     }
     sqlite3_finalize(stmt);
-    sqlite3_exec(p->session_db, "COMMIT", NULL, NULL, NULL);
+    if (sqlite3_exec(p->session_db, "COMMIT", NULL, NULL, NULL) != SQLITE_OK) {
+        return NGX_ERROR;
+    }
     return NGX_OK;
-
-fail:
-    if (stmt) sqlite3_finalize(stmt);
-    sqlite3_exec(p->session_db, "ROLLBACK", NULL, NULL, NULL);
-    return NGX_ERROR;
 }
 
 static ngx_int_t
