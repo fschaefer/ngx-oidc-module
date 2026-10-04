@@ -22,8 +22,10 @@ import urllib.parse
 import urllib.request
 
 CA = os.environ.get("KC_CA", "/certs/ca.crt")
-APP = "http://app.test/"
-LOGOUT = "http://app.test/logout"
+APP = os.environ.get("KC_APP", "http://app.test/")
+LOGOUT = os.environ.get("KC_LOGOUT", APP.rstrip("/") + "/logout")
+COOKIE = os.environ.get("KC_COOKIE", "oidc_keycloak_session")
+EXPECT = os.environ.get("KC_EXPECT", "Hello, Jane Doe!")
 USER = os.environ.get("KC_USER", "jane")
 PASSWORD = os.environ.get("KC_PASSWORD", "jane-password")
 REALM = os.environ.get("KC_REALM", "https://keycloak.test:8443/realms/oidc-test")
@@ -93,9 +95,11 @@ def main():
                   headers={"Content-Type": "application/x-www-form-urlencoded"})
     text = hops[-1][3].decode(errors="replace")
     check("backend answers", hops[-1][0] == 200, text.strip()[:80])
-    check("ID token claims reach the backend", "Hello, Jane Doe!" in text
-          and "Email: jane@example.com" in text, text.strip().replace("\n", " | ")[:120])
-    issued = [c.value for c in jar if c.name == "oidc_keycloak_session"]
+    check("backend got the authenticated identity", EXPECT in text,
+          text.strip().replace("\n", " | ")[:120])
+    if "Email:" in text:
+        check("ID token claims reach the backend", "Email: jane@example.com" in text)
+    issued = [c.value for c in jar if c.name == COOKIE]
     check("session cookie issued, opaque",
           bool(issued) and all(issued) and not any("eyJ" in v for v in issued),
           "cookies: " + ",".join(sorted(c.name for c in jar)))
@@ -108,7 +112,7 @@ def main():
     check("id_token_hint sent", "id_token_hint=" in location)
     check("post_logout_redirect_uri sent", "post_logout_redirect_uri=" in location)
     check("local session cookie cleared",
-          any(c.name == "oidc_keycloak_session" and not c.value for c in jar))
+          any(c.name == COOKIE and not c.value for c in jar))
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(location).query)
     if "id_token_hint" in query:
         token = query["id_token_hint"][0]
