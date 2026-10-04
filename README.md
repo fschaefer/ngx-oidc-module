@@ -25,7 +25,6 @@ Not implemented:
 - Clustered/multi-host session storage
 - Frontchannel logout
 
-
 ## Build
 
 Build nginx 1.31.3 and dynamic module:
@@ -121,7 +120,7 @@ Provider block in `http` context.
 | `logout_uri <path>` | No | Local logout path. |
 | `post_logout_uri <url>` | No | Redirect target after IdP logout. |
 | `backchannel_logout_uri <path>` | No | Local IdP POST endpoint for OIDC Backchannel Logout. Requires `session_store` for session revocation. |
-| `userinfo on\|off` | No | Fetch UserInfo during callback. Default: `off`. |
+| `userinfo on` / `off` | No | Fetch UserInfo during callback. Default: `off`. |
 | `session_max_age <duration>` | No | Extra session ceiling, capped by ID-token expiry. |
 | `session_cookie <name>` | No | Session cookie name. Use one per provider on same domain. |
 
@@ -227,6 +226,19 @@ docker compose -f test/docker-compose.keycloak.yml --profile idp down
 ```
 
 On Apple Silicon, Keycloak runs as `linux/amd64` because current native image crashes during JVM startup. First start under emulation takes roughly one minute.
+
+### Automated Keycloak flow
+
+```sh
+./test/keycloak-e2e.sh
+```
+
+Brings the stack up, drives login and RP logout from a container on the compose
+network, and asserts that the ID-token claims reach the backend, that the
+end-session redirect carries `id_token_hint`, and that the Keycloak session is
+gone afterwards. The stack is torn down again unless `KEEP=1` is set. No
+`/etc/hosts` entry is needed for this variant.
+
 ### Against an external Keycloak
 
 The stack can also rely on an IdP that already runs elsewhere (for example a
@@ -243,19 +255,6 @@ The template `test/nginx-keycloak-remote.conf.in` is rendered into
 Nothing is published on port 80 here (`APP_PORT`, default 8099, only exists to
 reach the stack by hand); the flow itself runs on the compose network.
 
-### Automated Keycloak flow
-
-```sh
-./test/keycloak-e2e.sh
-```
-
-Brings the stack up, drives login and RP logout from a container on the compose
-network, and asserts that the ID-token claims reach the backend, that the
-end-session redirect carries `id_token_hint`, and that the Keycloak session is
-gone afterwards. The stack is torn down again unless `KEEP=1` is set. No
-`/etc/hosts` entry is needed for this variant.
-
-
 ## Security Notes
 
 - Use HTTPS in production. Cookie `Secure` is applied only to HTTPS connections.
@@ -267,6 +266,10 @@ gone afterwards. The stack is torn down again unless `KEEP=1` is set. No
 - For a supervised, non-test deployment (TLS, SQLite session volume, systemd unit) see `example/docker-service/`.
 - SQLite is single-host storage. Do not use it across load-balanced nginx nodes or NFS.
 - Delete the SQLite file when upgrading across module versions that change the session schema; old rows are not migrated.
+- Backend calls to the IdP (discovery, JWKS, token, UserInfo, refresh,
+  revocation) run inside nginx workers with a 30-second timeout and an
+  8 MiB response cap, so a slow or misbehaving IdP cannot pin workers or
+  exhaust memory.
 
 ## License
 
